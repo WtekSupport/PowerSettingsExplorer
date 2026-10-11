@@ -122,6 +122,20 @@ pub struct UiText {
     pub group_body_fmt: &'static str, // {hint}, {count}
     pub unknown_item_body: &'static str,
     pub power_setting_fallback: &'static str,
+    pub preset_label: &'static str,
+    pub preset_apply: &'static str,
+    pub preset_save: &'static str,
+    pub preset_load: &'static str,
+    pub preset_builtin_all_auto: &'static str,
+    pub preset_builtin_catalog_on: &'static str,
+    pub preset_builtin_essential: &'static str,
+    pub preset_builtin_enthusiast: &'static str,
+    pub preset_confirm: &'static str, // {count}
+    pub preset_result: &'static str,   // {changed}, {errors}
+    pub preset_save_title: &'static str,
+    pub preset_load_title: &'static str,
+    pub preset_filter: &'static str,
+    pub preset_saved: &'static str,
 }
 
 pub fn ui(lang: Lang) -> &'static UiText {
@@ -158,10 +172,8 @@ static UI_RU: UiText = UiText {
     section_where: "Где задать «От сети» / «От батареи»",
     section_visibility: "Видимость",
     no_catalog_body: "Назначение\nОписание для этого GUID пока не добавлено в каталог.\n\n\
-Где задать «От сети» / «От батареи»\n\
-Панель управления → Электропитание → Настройка схемы → Изменить дополнительные параметры.\n\n\
-Видимость в этой программе\n\
-Селектор «Вкл / Выкл / Авто» ниже меняет только видимость пункта в списке, не сами значения.",
+Поведение\n\
+Выберите параметр с известным GUID в дереве или добавьте запись в каталог приложения.",
     root_body: "Назначение\n\n\
 Дерево слева — разделы и параметры из «Дополнительных параметров электропитания» Windows.\n\n\
 Поведение\n\n\
@@ -178,6 +190,22 @@ static UI_RU: UiText = UiText {
 Селектор «Вкл / Выкл / Авто» доступен только для отдельного параметра внутри раздела.",
     unknown_item_body: "Назначение\n\nВыбранный пункт дерева. Раскройте его или выберите параметр внутри раздела.",
     power_setting_fallback: "Параметр электропитания",
+    preset_label: "Пресет:",
+    preset_apply: "Применить",
+    preset_save: "Сохранить…",
+    preset_load: "Загрузить…",
+    preset_builtin_all_auto: "Как Windows (Авто везде)",
+    preset_builtin_catalog_on: "Документированные (вкл.)",
+    preset_builtin_essential: "Базовые разделы",
+    preset_builtin_enthusiast: "Энтузиаст",
+    preset_confirm: "Будет пересчитана видимость для {count} параметров в дереве.\n\
+Перед массовым изменением рекомендуется точка восстановления.\n\n\
+Продолжить?",
+    preset_result: "Готово.\nИзменено: {changed}.\nБез изменений: {skipped}.\nОшибок записи: {errors}.",
+    preset_save_title: "Сохранить пресет",
+    preset_load_title: "Загрузить пресет",
+    preset_filter: "Пресеты (*.preset)",
+    preset_saved: "Пресет сохранён.",
 };
 
 static UI_EN: UiText = UiText {
@@ -207,10 +235,8 @@ Approve the UAC prompt or run the program as administrator.",
     section_where: "Where to set On battery / Plugged in",
     section_visibility: "Visibility",
     no_catalog_body: "Purpose\nNo catalog description for this GUID yet.\n\n\
-Where to set On battery / Plugged in\n\
-Control Panel → Power Options → Change plan settings → Change advanced power settings.\n\n\
-Visibility in this program\n\
-The On / Off / Auto selector below changes only whether the item appears in that list, not the values themselves.",
+Behavior\n\
+Pick a setting with a known GUID in the tree, or add an entry to the app catalog.",
     root_body: "Purpose\n\n\
 The tree on the left lists sections and settings from Windows Advanced power settings.\n\n\
 Behavior\n\n\
@@ -227,6 +253,22 @@ Visibility\n\n\
 The On / Off / Auto selector is available only for an individual setting inside the section.",
     unknown_item_body: "Purpose\n\nSelected tree item. Expand it or pick a setting inside the section.",
     power_setting_fallback: "Power setting",
+    preset_label: "Preset:",
+    preset_apply: "Apply",
+    preset_save: "Save as…",
+    preset_load: "Load…",
+    preset_builtin_all_auto: "Windows default (Auto all)",
+    preset_builtin_catalog_on: "Documented (show catalog)",
+    preset_builtin_essential: "Essentials",
+    preset_builtin_enthusiast: "Enthusiast",
+    preset_confirm: "Visibility will be updated for {count} settings in the tree.\n\
+Consider a restore point before bulk changes.\n\n\
+Continue?",
+    preset_result: "Done.\nChanged: {changed}.\nUnchanged: {skipped}.\nWrite errors: {errors}.",
+    preset_save_title: "Save preset",
+    preset_load_title: "Load preset",
+    preset_filter: "Presets (*.preset)",
+    preset_saved: "Preset saved.",
 };
 
 pub fn is_section_header(lang: Lang, line: &str) -> bool {

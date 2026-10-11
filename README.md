@@ -21,6 +21,7 @@ Changes **visibility only** — never AC/DC timeout or policy values.
   - **On** — show in Advanced power settings
   - **Off** — hide (`POWER_ATTRIBUTE_HIDE`)
   - **Auto** — remove `Attributes` (Windows default)
+- **Visibility presets** — apply a profile to the whole tree at once (built-in + save/load `.preset` files)
 - Requests administrator rights on launch (UAC)
 
 ## Download
@@ -58,7 +59,18 @@ UAC elevation is configured via [`.cargo/config.toml`](.cargo/config.toml)
 2. Select a section or setting in the left tree.
 3. Read the description on the right.
 4. For a setting, choose **On / Off / Auto** — written to the registry immediately.
-5. Close and reopen the Windows **Advanced power settings** dialog to see the result.
+5. Or pick a **preset**, click **Apply** — visibility is updated for every setting in the tree (confirmation required). A backup snapshot is written under `%LOCALAPPDATA%\PowerSettingsExplorer\backups\` before bulk apply.
+6. **Save as…** stores the current visibility of all settings to `%LOCALAPPDATA%\PowerSettingsExplorer\presets\`. **Load…** applies a `.preset` file from disk.
+7. Close and reopen the Windows **Advanced power settings** dialog to see the result.
+
+### Built-in presets
+
+| Preset | Effect (full tree) |
+|--------|---------------------|
+| Windows default | **Auto** for every setting |
+| Documented | **On** for catalog entries, **Off** for the rest |
+| Essentials | **On** for sleep, display, battery, power buttons; unnamed OEM entries **Off**; others **Off** |
+| Enthusiast | **On** for processor, disk, PCI, USB, sleep, graphics; unnamed **Off**; others **Off** |
 
 ## Safety
 

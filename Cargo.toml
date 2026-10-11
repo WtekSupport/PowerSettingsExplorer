@@ -1,6 +1,6 @@
 [package]
 name = "power-settings-explorer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Power Settings Explorer — show or hide Windows Advanced power settings entries"
 license = "MIT"

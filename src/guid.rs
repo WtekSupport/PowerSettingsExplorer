@@ -5,7 +5,7 @@ use std::fmt;
 /// Subgroup GUID for settings that belong to no subgroup (SUB_NONE).
 pub const NO_SUBGROUP_GUID: &str = "fea3413e-7e05-4911-9a71-700331f1c294";
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Guid {
     pub data1: u32,

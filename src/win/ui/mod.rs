@@ -1,15 +1,21 @@
 mod win32;
 
 use crate::i18n::{self, Lang};
+use crate::backup;
 use crate::power::catalog;
 use crate::power::catalog_subgroups;
+use crate::power::presets::{
+    self, BuiltinPresetId, PresetDefinition,
+};
 use crate::power::scan::{scan_all, SettingRef, SubgroupNode};
 use crate::power::visibility::{
     apply_mode, mode_from_attributes, VisibilityMode,
 };
 use crate::win::wide::to_wide;
 use std::ffi::c_void;
+use std::path::PathBuf;
 use std::ptr;
+use std::time::{SystemTime, UNIX_EPOCH};
 use win32::*;
 
 pub const ID_TREE: i32 = 1001;
@@ -19,6 +25,14 @@ pub const ID_VIS_LABEL: i32 = 1004;
 pub const ID_VIS_MODE: i32 = 1005;
 pub const ID_LANG_LABEL: i32 = 1006;
 pub const ID_LANG: i32 = 1007;
+pub const ID_PRESET_LABEL: i32 = 1008;
+pub const ID_PRESET: i32 = 1009;
+pub const ID_PRESET_APPLY: i32 = 1010;
+pub const ID_PRESET_SAVE: i32 = 1011;
+pub const ID_PRESET_LOAD: i32 = 1012;
+
+const CB_ERR: isize = -1;
+const BN_CLICKED: u16 = 0;
 
 const WM_TREE_SYNC: UINT = 0x8000 + 42;
 const WM_LBUTTONDOWN: UINT = 0x0201;
@@ -50,6 +64,12 @@ struct AppState {
     vis_mode: HWND,
     lang_label: HWND,
     lang_combo: HWND,
+    preset_label: HWND,
+    preset_combo: HWND,
+    preset_apply: HWND,
+    preset_save: HWND,
+    preset_load: HWND,
+    preset_entries: Vec<PresetListEntry>,
     lang: Lang,
     nodes: Vec<SubgroupNode>,
     settings_flat: Vec<SettingRef>,
@@ -65,6 +85,12 @@ struct AppState {
     suppress_vis_apply: bool,
     suppress_lang_apply: bool,
     font: HFONT,
+}
+
+#[derive(Clone)]
+enum PresetListEntry {
+    Builtin(BuiltinPresetId),
+    User(PathBuf),
 }
 
 unsafe fn state_mut(hwnd: HWND) -> Option<&'static mut AppState> {
@@ -223,6 +249,11 @@ fn apply_font(state: &AppState) {
         state.vis_mode,
         state.lang_label,
         state.lang_combo,
+        state.preset_label,
+        state.preset_combo,
+        state.preset_apply,
+        state.preset_save,
+        state.preset_load,
     ] {
         unsafe {
             SendMessageW(h, WM_SETFONT, state.font as WPARAM, 1);
@@ -274,13 +305,236 @@ fn refill_lang_combo(state: &mut AppState) {
     state.suppress_lang_apply = false;
 }
 
+fn chrome_window_title(lang: Lang) -> String {
+    format!(
+        "{} v{}",
+        i18n::ui(lang).window_title,
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
 fn apply_language_chrome(state: &mut AppState) {
     let t = i18n::ui(state.lang);
-    set_text(state.hwnd, t.window_title);
+    set_text(state.hwnd, &chrome_window_title(state.lang));
     set_text(state.vis_label, t.vis_label);
     set_text(state.lang_label, t.lang_label);
+    set_text(state.preset_label, t.preset_label);
+    set_text(state.preset_apply, t.preset_apply);
+    set_text(state.preset_save, t.preset_save);
+    set_text(state.preset_load, t.preset_load);
     refill_vis_combo(state);
     refill_lang_combo(state);
+    refill_preset_combo(state);
+}
+
+fn refill_preset_combo(state: &mut AppState) {
+    let prev = unsafe { SendMessageW(state.preset_combo, CB_GETCURSEL, 0, 0) };
+    state.preset_entries.clear();
+    unsafe {
+        SendMessageW(state.preset_combo, CB_RESETCONTENT, 0, 0);
+    }
+    for id in BuiltinPresetId::ALL {
+        state
+            .preset_entries
+            .push(PresetListEntry::Builtin(id));
+        combo_add_item(state.preset_combo, id.display_name(state.lang));
+    }
+    for path in presets::list_user_presets() {
+        let label = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("preset")
+            .to_string();
+        state.preset_entries.push(PresetListEntry::User(path));
+        combo_add_item(state.preset_combo, &label);
+    }
+    let sel = if prev != CB_ERR && (prev as usize) < state.preset_entries.len() {
+        prev
+    } else if !state.preset_entries.is_empty() {
+        0
+    } else {
+        CB_ERR
+    };
+    if sel != CB_ERR {
+        unsafe {
+            SendMessageW(state.preset_combo, CB_SETCURSEL, sel as WPARAM, 0);
+        }
+    }
+}
+
+fn preset_definition_for_entry(entry: &PresetListEntry) -> Option<PresetDefinition> {
+    match entry {
+        PresetListEntry::Builtin(id) => Some(PresetDefinition::builtin(*id)),
+        PresetListEntry::User(path) => presets::load_preset_file(path).ok(),
+    }
+}
+
+fn selected_preset_definition(state: &AppState) -> Option<PresetDefinition> {
+    let sel = unsafe { SendMessageW(state.preset_combo, CB_GETCURSEL, 0, 0) };
+    if sel == CB_ERR {
+        return None;
+    }
+    let entry = state.preset_entries.get(sel as usize)?;
+    preset_definition_for_entry(entry)
+}
+
+fn preset_file_filter() -> Vec<u16> {
+    "Preset (*.preset)\0*.preset\0"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+fn pick_save_preset_path(hwnd: HWND, title: &str, default_name: &str) -> Option<PathBuf> {
+    let mut file_buf = vec![0u16; 512];
+    for (i, c) in default_name.encode_utf16().enumerate() {
+        if i + 1 >= file_buf.len() {
+            break;
+        }
+        file_buf[i] = c;
+    }
+    let filter = preset_file_filter();
+    let title_w = to_wide(title);
+    let def_ext = to_wide("preset");
+    let mut ofn: OPENFILENAMEW = unsafe { std::mem::zeroed() };
+    ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFilter = filter.as_ptr();
+    ofn.lpstrFile = file_buf.as_mut_ptr();
+    ofn.nMaxFile = file_buf.len() as u32;
+    ofn.lpstrTitle = title_w.as_ptr();
+    ofn.lpstrDefExt = def_ext.as_ptr();
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_HIDEREADONLY;
+    if unsafe { GetSaveFileNameW(&mut ofn) } == FALSE {
+        return None;
+    }
+    let len = file_buf.iter().position(|&c| c == 0).unwrap_or(0);
+    Some(PathBuf::from(String::from_utf16_lossy(
+        &file_buf[..len],
+    )))
+}
+
+fn pick_open_preset_path(hwnd: HWND, title: &str) -> Option<PathBuf> {
+    let mut file_buf = vec![0u16; 512];
+    let filter = preset_file_filter();
+    let title_w = to_wide(title);
+    let mut ofn: OPENFILENAMEW = unsafe { std::mem::zeroed() };
+    ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFilter = filter.as_ptr();
+    ofn.lpstrFile = file_buf.as_mut_ptr();
+    ofn.nMaxFile = file_buf.len() as u32;
+    ofn.lpstrTitle = title_w.as_ptr();
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_HIDEREADONLY;
+    if unsafe { GetOpenFileNameW(&mut ofn) } == FALSE {
+        return None;
+    }
+    let len = file_buf.iter().position(|&c| c == 0).unwrap_or(0);
+    Some(PathBuf::from(String::from_utf16_lossy(
+        &file_buf[..len],
+    )))
+}
+
+fn export_visibility_backup(state: &AppState) {
+    let Some(dir) = presets::backups_dir() else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = dir.join(format!("backup-{stamp}.txt"));
+    if let Some(s) = path.to_str() {
+        let _ = backup::export_backup(s, &state.nodes);
+    }
+}
+
+fn apply_preset_with_confirm(state: &mut AppState, preset: PresetDefinition) {
+    let count = state.settings_flat.len();
+    let t = i18n::ui(state.lang);
+    let confirm = t.preset_confirm.replace("{count}", &count.to_string());
+    if msg_box(
+        state.hwnd,
+        &confirm,
+        t.elevate_caption,
+        MB_YESNO | MB_ICONWARNING,
+    ) != IDYES
+    {
+        return;
+    }
+    export_visibility_backup(state);
+    let result = presets::apply_preset(&state.nodes, &preset);
+    refresh_from_registry(state);
+    let summary = t
+        .preset_result
+        .replace("{changed}", &result.changed.to_string())
+        .replace("{skipped}", &result.skipped.to_string())
+        .replace("{errors}", &result.errors.len().to_string());
+    msg_box(
+        state.hwnd,
+        &summary,
+        t.elevate_caption,
+        MB_OK | MB_ICONINFORMATION,
+    );
+}
+
+fn apply_selected_preset(state: &mut AppState) {
+    let Some(preset) = selected_preset_definition(state) else {
+        return;
+    };
+    apply_preset_with_confirm(state, preset);
+}
+
+fn save_current_as_preset(state: &mut AppState) {
+    let t = i18n::ui(state.lang);
+    let default_name = "my-preset.preset";
+    let Some(mut path) = pick_save_preset_path(state.hwnd, t.preset_save_title, default_name) else {
+        return;
+    };
+    if path.extension().is_none() {
+        path.set_extension("preset");
+    }
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("custom");
+    if presets::save_preset_file(&path, name, &state.nodes).is_err() {
+        return;
+    }
+    refill_preset_combo(state);
+    if let Some(idx) = state.preset_entries.iter().position(|e| {
+        matches!(e, PresetListEntry::User(p) if p == &path)
+    }) {
+        unsafe {
+            SendMessageW(state.preset_combo, CB_SETCURSEL, idx, 0);
+        }
+    }
+    msg_box(
+        state.hwnd,
+        t.preset_saved,
+        t.elevate_caption,
+        MB_OK | MB_ICONINFORMATION,
+    );
+}
+
+fn load_preset_from_file(state: &mut AppState) {
+    let t = i18n::ui(state.lang);
+    let Some(path) = pick_open_preset_path(state.hwnd, t.preset_load_title) else {
+        return;
+    };
+    let Ok(preset) = presets::load_preset_file(&path) else {
+        return;
+    };
+    refill_preset_combo(state);
+    if let Some(idx) = state.preset_entries.iter().position(|e| {
+        matches!(e, PresetListEntry::User(p) if p == &path)
+    }) {
+        unsafe {
+            SendMessageW(state.preset_combo, CB_SETCURSEL, idx, 0);
+        }
+    }
+    apply_preset_with_confirm(state, preset);
 }
 
 fn combo_add_item(combo: HWND, text: &str) {
@@ -891,18 +1145,30 @@ fn layout(state: &AppState) {
     let w = rc.right - rc.left;
     let h = rc.bottom - rc.top;
     let margin = 10;
-    let tree_w = (w * 40 / 100).max(220);
+    const MIN_RIGHT_W: i32 = 420;
+    let mut tree_w = (w * 38 / 100).max(200);
+    if w - margin * 3 - tree_w < MIN_RIGHT_W {
+        tree_w = (w - margin * 3 - MIN_RIGHT_W).max(160);
+    }
     let right_x = margin + tree_w + margin;
-    let right_w = w - right_x - margin;
+    let right_w = (w - right_x - margin).max(MIN_RIGHT_W);
     let row_h = 28;
+    let row_gap = 6;
     let lang_label_w = 70;
-    let lang_combo_w = 110;
+    let lang_combo_w = 110.min(right_w.saturating_sub(lang_label_w + 8));
     let vis_label_w = 220.min(right_w.saturating_sub(130));
-    let vis_combo_w = (right_w - vis_label_w - 8).clamp(100, 160);
+    let vis_combo_w = (right_w - vis_label_w - 8).clamp(100, right_w - vis_label_w - 8);
+    let title_h = 28;
+    let preset_combo_y = margin + title_h + 4;
+    let preset_btn_y = preset_combo_y + row_h + row_gap;
+    let preset_label_w = 70.min(right_w);
+    let preset_combo_w = (right_w - preset_label_w - 8).max(80);
+    let btn_gap = 6;
+    let btn_w = ((right_w - btn_gap * 2) / 3).max(72);
     let bottom_y = h - margin - row_h;
-    let lang_y = bottom_y - row_h - 8;
+    let lang_y = bottom_y - row_h - row_gap;
+    let desc_top = preset_btn_y + row_h + 8;
     let desc_bottom = lang_y - 8;
-    let desc_top = margin + 36;
     let desc_h = (desc_bottom - desc_top).max(80);
 
     unsafe {
@@ -914,7 +1180,28 @@ fn layout(state: &AppState) {
             h - 2 * margin,
             TRUE,
         );
-        MoveWindow(state.title, right_x, margin, right_w, 28, TRUE);
+        MoveWindow(state.title, right_x, margin, right_w, title_h, TRUE);
+        MoveWindow(
+            state.preset_label,
+            right_x,
+            preset_combo_y,
+            preset_label_w,
+            row_h,
+            TRUE,
+        );
+        MoveWindow(
+            state.preset_combo,
+            right_x + preset_label_w + 8,
+            preset_combo_y,
+            preset_combo_w,
+            row_h + 200,
+            TRUE,
+        );
+        let mut bx = right_x;
+        for btn in [state.preset_apply, state.preset_save, state.preset_load] {
+            MoveWindow(btn, bx, preset_btn_y, btn_w, row_h, TRUE);
+            bx += btn_w + btn_gap;
+        }
         MoveWindow(state.desc, right_x, desc_top, right_w, desc_h, TRUE);
         MoveWindow(
             state.lang_label,
@@ -948,6 +1235,20 @@ fn layout(state: &AppState) {
             row_h + 200,
             TRUE,
         );
+        let top_flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+        for chrome in [
+            state.lang_label,
+            state.lang_combo,
+            state.preset_label,
+            state.preset_combo,
+            state.preset_apply,
+            state.preset_save,
+            state.preset_load,
+            state.vis_label,
+            state.vis_mode,
+        ] {
+            SetWindowPos(chrome, HWND_TOP, 0, 0, 0, 0, top_flags);
+        }
     }
 }
 
@@ -1068,6 +1369,66 @@ unsafe extern "system" fn wnd_proc(
                 ID_VIS_MODE,
                 instance,
             );
+            let preset_label = create_control(
+                WC_STATICW,
+                t.preset_label,
+                0,
+                0,
+                0,
+                70,
+                24,
+                hwnd,
+                ID_PRESET_LABEL,
+                instance,
+            );
+            let preset_combo = create_control(
+                WC_COMBOBOXW,
+                "",
+                CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL,
+                0,
+                0,
+                200,
+                200,
+                hwnd,
+                ID_PRESET,
+                instance,
+            );
+            let preset_apply = create_control(
+                WC_BUTTONW,
+                t.preset_apply,
+                WS_TABSTOP,
+                0,
+                0,
+                88,
+                24,
+                hwnd,
+                ID_PRESET_APPLY,
+                instance,
+            );
+            let preset_save = create_control(
+                WC_BUTTONW,
+                t.preset_save,
+                WS_TABSTOP,
+                0,
+                0,
+                88,
+                24,
+                hwnd,
+                ID_PRESET_SAVE,
+                instance,
+            );
+            let preset_load = create_control(
+                WC_BUTTONW,
+                t.preset_load,
+                WS_TABSTOP,
+                0,
+                0,
+                88,
+                24,
+                hwnd,
+                ID_PRESET_LOAD,
+                instance,
+            );
 
             let mut app = Box::new(AppState {
                 hwnd,
@@ -1078,6 +1439,12 @@ unsafe extern "system" fn wnd_proc(
                 vis_mode,
                 lang_label,
                 lang_combo,
+                preset_label,
+                preset_combo,
+                preset_apply,
+                preset_save,
+                preset_load,
+                preset_entries: Vec::new(),
                 lang,
                 nodes: Vec::new(),
                 settings_flat: Vec::new(),
@@ -1117,8 +1484,8 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_GETMINMAXINFO => {
             let info = &mut *(lparam as *mut MINMAXINFO);
-            info.ptMinTrackSize.x = 680;
-            info.ptMinTrackSize.y = 420;
+            info.ptMinTrackSize.x = 720;
+            info.ptMinTrackSize.y = 500;
             return 0;
         }
         WM_NOTIFY => {
@@ -1150,6 +1517,12 @@ unsafe extern "system" fn wnd_proc(
                         apply_language(state, lang);
                     }
                 });
+            } else if id == ID_PRESET_APPLY && code == BN_CLICKED {
+                with_state(hwnd, apply_selected_preset);
+            } else if id == ID_PRESET_SAVE && code == BN_CLICKED {
+                with_state(hwnd, save_current_as_preset);
+            } else if id == ID_PRESET_LOAD && code == BN_CLICKED {
+                with_state(hwnd, load_preset_from_file);
             }
             return 0;
         }
@@ -1220,7 +1593,7 @@ pub fn run() -> i32 {
         RegisterClassExW(&wc);
     }
 
-    let title = to_wide(i18n::ui(i18n::initial_lang()).window_title);
+    let title = to_wide(&chrome_window_title(i18n::initial_lang()));
     let hwnd = unsafe {
         CreateWindowExW(
             0,
@@ -1229,8 +1602,8 @@ pub fn run() -> i32 {
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             100,
             100,
-            920,
-            600,
+            960,
+            640,
             0,
             0,
             instance,

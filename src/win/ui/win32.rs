@@ -290,6 +290,15 @@ extern "system" {
     pub fn SetWindowTextW(hwnd: HWND, text: *const u16);
     pub fn GetClientRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
     pub fn MoveWindow(hwnd: HWND, x: i32, y: i32, w: i32, h: i32, repaint: BOOL) -> BOOL;
+    pub fn SetWindowPos(
+        hwnd: HWND,
+        hwnd_insert_after: HWND,
+        x: i32,
+        y: i32,
+        cx: i32,
+        cy: i32,
+        flags: u32,
+    ) -> BOOL;
     pub fn SendMessageW(hwnd: HWND, msg: UINT, w: WPARAM, l: LPARAM) -> LRESULT;
     pub fn SetWindowLongPtrW(hwnd: HWND, index: i32, val: isize) -> isize;
     pub fn GetWindowLongPtrW(hwnd: HWND, index: i32) -> isize;
@@ -314,6 +323,45 @@ extern "system" {
 #[link(name = "kernel32")]
 extern "system" {
     pub fn LoadLibraryW(name: *const u16) -> HINSTANCE;
+}
+
+#[link(name = "comdlg32")]
+extern "system" {
+    pub fn GetOpenFileNameW(p: *mut OPENFILENAMEW) -> BOOL;
+    pub fn GetSaveFileNameW(p: *mut OPENFILENAMEW) -> BOOL;
+}
+
+pub const OFN_OVERWRITEPROMPT: u32 = 0x00000002;
+pub const OFN_PATHMUSTEXIST: u32 = 0x00000800;
+pub const OFN_FILEMUSTEXIST: u32 = 0x00001000;
+pub const OFN_HIDEREADONLY: u32 = 0x00000004;
+pub const OFN_EXPLORER: u32 = 0x00080000;
+
+#[repr(C)]
+pub struct OPENFILENAMEW {
+    pub lStructSize: u32,
+    pub hwndOwner: HWND,
+    pub hInstance: HINSTANCE,
+    pub lpstrFilter: *const u16,
+    pub lpstrCustomFilter: *mut u16,
+    pub nMaxCustFilter: u32,
+    pub nFilterIndex: u32,
+    pub lpstrFile: *mut u16,
+    pub nMaxFile: u32,
+    pub lpstrFileTitle: *mut u16,
+    pub nMaxFileTitle: u32,
+    pub lpstrInitialDir: *const u16,
+    pub lpstrTitle: *const u16,
+    pub Flags: u32,
+    pub nFileOffset: u16,
+    pub nFileExtension: u16,
+    pub lpstrDefExt: *const u16,
+    pub lCustData: isize,
+    pub lpfnHook: *mut c_void,
+    pub lpTemplateName: *const u16,
+    pub pvReserved: *mut c_void,
+    pub dwReserved: u32,
+    pub FlagsEx: u32,
 }
 
 #[link(name = "gdi32")]
@@ -348,6 +396,10 @@ pub struct MSG {
 }
 
 pub const SW_SHOW: i32 = 5;
+pub const HWND_TOP: HWND = 0;
+pub const SWP_NOMOVE: u32 = 0x0002;
+pub const SWP_NOSIZE: u32 = 0x0001;
+pub const SWP_NOACTIVATE: u32 = 0x0010;
 pub const WM_SETFONT: UINT = 0x0030;
 
 pub const WC_TREEVIEWW: &str = "SysTreeView32";
