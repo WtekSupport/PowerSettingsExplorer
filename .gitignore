@@ -1,0 +1,29 @@
+# Build
+/target/
+**/*.rs.bk
+
+# Python catalog tooling
+scripts/__pycache__/
+*.py[cod]
+.Python
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local scratch / accidental artifacts
+_sz.*
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Local backups / exports (keep tracked CSV used by generator)
+*.bak
+*.reg
+!settings_export.csv

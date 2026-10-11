@@ -1,0 +1,24 @@
+﻿0012ee47-9041-4b5d-9b77-535fba8b1442|-301,Harddisk settings
+02F815B5-A5CF-4C84-BF20-649D1F75D3D8|-2400;SubgroupName
+0d7dbae2-4294-402a-ba8e-26777e8488cd|-408,SubGroupName
+0E796BDB-100D-47D6-A2D5-F7D2DAA51F51|-103,Lock Console when System Wakes
+19cbb8fa-5279-450e-9fac-8a3d5fedd0c1|-4097
+238C9FA8-0AAD-41ED-83F4-97BE242C8F20|-120,Sleep transition settings
+245d8541-3943-4422-b025-13a784f679b7|-101,Power Scheme Personality
+2a737441-1930-4402-8d77-b2bebba308a3|-1200;UsbPowerSettingsName
+2E601130-5351-4d9d-8E04-252966BAD054|-1001,Idle Resiliency
+44f3beca-a7c0-460e-9df2-bb8b99e0cba6|Intel(R) Graphics Settings
+48672F38-7A9A-4bb2-8BF8-3D85BE19DE4E|-1111,Interrupt Steering Settings
+48df9d60-4f68-11dc-8314-0800200c9a66|
+4f971e89-eebd-4455-a8de-9e59040e7347|-251,Power buttons settings
+4faab71a-92e5-4726-b531-224559672d19|-151,Device idle policy
+501a4d13-42af-4429-9fd1-a8218c268e20|-601,PCI Express
+54533251-82be-4824-96c1-47b60b740d00|-351,Processor power settings
+5FB4938D-1EE8-4b0f-9A3C-5036B0AB995C|-1601,Graphics settings
+68AFB2D9-EE95-47A8-8F50-4115088073B1|-1151,Disconnected Standby Mode
+7516b95f-f776-4464-8c53-06167f40cc99|-401,Video settings
+8619B916-E004-4dd8-9B66-DAE86F806698|-1101,Presence Aware Power Behavior
+9596FB26-9850-41fd-AC3E-F7C3C00AFD4B|-3001,Multimedia settings
+DE830923-A562-41AF-A086-E3A2C6BAD2DA|-1161,Energy Saver settings
+e73a048d-bf27-4f12-9731-8b2076e8891f|-201,Battery settings
+F15576E8-98B7-4186-B944-EAFA664402D9|-1141,Networking connectivity in Standby

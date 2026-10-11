@@ -1,0 +1,17 @@
+[package]
+name = "power-settings-visibility"
+version = "0.1.0"
+edition = "2021"
+description = "Show or hide Windows Advanced power settings entries (visibility only)"
+license = "MIT"
+readme = "README.md"
+keywords = ["windows", "power", "powercfg", "registry", "win32"]
+categories = ["os::windows-apis", "gui"]
+repository = "https://github.com/OWNER/power-settings-visibility"
+homepage = "https://github.com/OWNER/power-settings-visibility"
+exclude = [
+    "target/",
+    "docs/PUBLISH.md",
+]
+
+[dependencies]
