@@ -1,5 +1,8 @@
 use crate::guid::{is_guid_str, Guid, NO_SUBGROUP_GUID};
 use crate::power::visibility::{read_attributes, VisibilityState};
+use crate::win::powrprof::{
+    resolve_indirect_string, setting_display_name, subgroup_display_name,
+};
 use crate::win::registry::{
     RegKey, POWER_SETTINGS_PATH, HKEY_LOCAL_MACHINE, KEY_READ,
 };
@@ -12,6 +15,8 @@ pub struct SettingRef {
     pub setting: Guid,
     pub subgroup_str: String,
     pub setting_str: String,
+    /// Имя из Windows (язык ОС). В UI предпочитаем каталог выбранного языка.
+    pub system_name: String,
     /// HKLM-relative path without prefix, e.g. PowerSettings\...\...
     pub registry_path: String,
     pub attributes: Option<u32>,
@@ -23,6 +28,8 @@ pub struct SettingRef {
 pub struct SubgroupNode {
     pub guid: Guid,
     pub guid_str: String,
+    /// Имя раздела из Windows (язык ОС). В UI предпочитаем каталог выбранного языка.
+    pub system_name: String,
     pub settings: Vec<SettingRef>,
 }
 
@@ -32,9 +39,6 @@ fn is_setting_key(key: &RegKey) -> bool {
     }
     if key.query_dword("ValueMin").ok().flatten().is_some() {
         return true;
-    }
-    if key.query_dword("FriendlyName").is_ok() {
-        // FriendlyName is REG_EXPAND_SZ — query as dword won't work; check Attributes/ValueMin only
     }
     false
 }
@@ -46,6 +50,36 @@ fn child_is_setting(sub_path: &str) -> bool {
                 || k.query_dword("ValueMin").ok().flatten().is_some()
         })
         .unwrap_or(false)
+}
+
+fn registry_friendly_name(registry_path: &str) -> Option<String> {
+    let key = RegKey::open(HKEY_LOCAL_MACHINE, registry_path, KEY_READ).ok()?;
+    let raw = key.query_string("FriendlyName").ok().flatten()?;
+    resolve_indirect_string(&raw).or_else(|| {
+        let t = raw.trim();
+        if t.is_empty() || t.starts_with('@') {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    })
+}
+
+fn resolve_subgroup_name(guid: &Guid, guid_str: &str, registry_path: &str) -> String {
+    subgroup_display_name(guid)
+        .or_else(|| registry_friendly_name(registry_path))
+        .unwrap_or_else(|| format!("({})", &guid_str[..8.min(guid_str.len())]))
+}
+
+fn resolve_setting_name(
+    subgroup: &Guid,
+    setting: &Guid,
+    setting_str: &str,
+    registry_path: &str,
+) -> String {
+    setting_display_name(subgroup, setting)
+        .or_else(|| registry_friendly_name(registry_path))
+        .unwrap_or_else(|| setting_str.to_string())
 }
 
 fn collect_setting(
@@ -60,11 +94,15 @@ fn collect_setting(
         .ok()
         .and_then(|k| k.query_dword("ValueMin").ok().flatten())
         .is_some();
+    let setting_str_l = setting_str.to_lowercase();
+    let system_name =
+        resolve_setting_name(subgroup, &setting, &setting_str_l, &registry_path);
     Some(SettingRef {
         subgroup: *subgroup,
         setting,
         subgroup_str: subgroup_str.to_string(),
-        setting_str: setting_str.to_lowercase(),
+        setting_str: setting_str_l,
+        system_name,
         registry_path,
         visibility: VisibilityState::from_attributes(attrs),
         attributes: attrs,
@@ -76,9 +114,12 @@ pub fn scan_all() -> Result<Vec<SubgroupNode>, u32> {
     let root = RegKey::open(HKEY_LOCAL_MACHINE, POWER_SETTINGS_PATH, KEY_READ)?;
     let top_keys = root.enum_subkeys()?;
     let mut subgroups: Vec<SubgroupNode> = Vec::new();
+    let orphan_guid = Guid::from_str(NO_SUBGROUP_GUID).unwrap();
+    let orphan_path = format!("{}\\{}", POWER_SETTINGS_PATH, NO_SUBGROUP_GUID);
     let mut orphan_subgroup: SubgroupNode = SubgroupNode {
-        guid: Guid::from_str(NO_SUBGROUP_GUID).unwrap(),
+        guid: orphan_guid,
         guid_str: NO_SUBGROUP_GUID.to_string(),
+        system_name: resolve_subgroup_name(&orphan_guid, NO_SUBGROUP_GUID, &orphan_path),
         settings: Vec::new(),
     };
 
@@ -107,9 +148,12 @@ pub fn scan_all() -> Result<Vec<SubgroupNode>, u32> {
 
         if !setting_children.is_empty() {
             let sg_guid = Guid::from_str(&name).unwrap();
+            let guid_str = name.to_lowercase();
+            let system_name = resolve_subgroup_name(&sg_guid, &guid_str, &sg_path);
             let mut node = SubgroupNode {
                 guid: sg_guid,
-                guid_str: name.to_lowercase(),
+                guid_str,
+                system_name,
                 settings: Vec::new(),
             };
             for c in setting_children {
@@ -118,7 +162,8 @@ pub fn scan_all() -> Result<Vec<SubgroupNode>, u32> {
                     node.settings.push(s);
                 }
             }
-            node.settings.sort_by(|a, b| a.setting_str.cmp(&b.setting_str));
+            node.settings
+                .sort_by(|a, b| a.system_name.to_lowercase().cmp(&b.system_name.to_lowercase()));
             subgroups.push(node);
         } else if is_setting_key(&sg_key) {
             let sg = Guid::from_str(NO_SUBGROUP_GUID).unwrap();
@@ -128,14 +173,20 @@ pub fn scan_all() -> Result<Vec<SubgroupNode>, u32> {
         }
     }
 
-    orphan_subgroup
-        .settings
-        .sort_by(|a, b| a.setting_str.cmp(&b.setting_str));
+    orphan_subgroup.settings.sort_by(|a, b| {
+        a.system_name
+            .to_lowercase()
+            .cmp(&b.system_name.to_lowercase())
+    });
     if !orphan_subgroup.settings.is_empty() {
         subgroups.insert(0, orphan_subgroup);
     }
 
-    subgroups.sort_by(|a, b| a.guid_str.cmp(&b.guid_str));
+    subgroups.sort_by(|a, b| {
+        a.system_name
+            .to_lowercase()
+            .cmp(&b.system_name.to_lowercase())
+    });
     Ok(subgroups)
 }
 
@@ -164,5 +215,24 @@ mod tests {
             s.setting_str == "4faab71a-92e5-4726-b531-224559672d19"
         });
         assert!(found, "Device idle policy GUID should be enumerated");
+    }
+
+    #[test]
+    fn display_names_are_localized() {
+        let nodes = scan_all().expect("registry scan");
+        let with_names = nodes
+            .iter()
+            .filter(|n| !n.system_name.starts_with('('))
+            .count();
+        assert!(with_names > 0, "expected at least one localized subgroup name");
+        let setting_named = nodes
+            .iter()
+            .flat_map(|n| n.settings.iter())
+            .filter(|s| s.system_name != s.setting_str)
+            .count();
+        assert!(
+            setting_named > 50,
+            "expected many settings with FriendlyName, got {setting_named}"
+        );
     }
 }

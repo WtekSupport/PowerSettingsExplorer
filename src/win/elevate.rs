@@ -1,5 +1,6 @@
-//! Перезапуск с правами администратора (UAC), если процесс не elevated.
+//! Restart elevated (UAC) when the process is not admin.
 
+use crate::i18n;
 use crate::win::wide::to_wide;
 use std::ptr;
 
@@ -56,11 +57,9 @@ pub fn ensure_elevated_or_exit() -> bool {
         return false;
     }
 
-    let msg = to_wide(
-        "Для изменения видимости параметров нужны права администратора.\n\
-         Подтвердите запрос UAC или запустите программу «От имени администратора».",
-    );
-    let cap = to_wide("Параметры электропитания");
+    let t = i18n::ui(i18n::initial_lang());
+    let msg = to_wide(t.elevate_fail);
+    let cap = to_wide(t.elevate_caption);
     unsafe {
         MessageBoxW(0, msg.as_ptr(), cap.as_ptr(), MB_OK | MB_ICONWARNING);
     }

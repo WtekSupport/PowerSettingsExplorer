@@ -1,14 +1,14 @@
 [package]
-name = "power-settings-visibility"
+name = "power-settings-explorer"
 version = "0.1.0"
 edition = "2021"
-description = "Show or hide Windows Advanced power settings entries (visibility only)"
+description = "Power Settings Explorer — show or hide Windows Advanced power settings entries"
 license = "MIT"
 readme = "README.md"
 keywords = ["windows", "power", "powercfg", "registry", "win32"]
 categories = ["os::windows-apis", "gui"]
-repository = "https://github.com/OWNER/power-settings-visibility"
-homepage = "https://github.com/OWNER/power-settings-visibility"
+repository = "https://github.com/WtekSupport/PowerSettingsExplorer"
+homepage = "https://github.com/WtekSupport/PowerSettingsExplorer"
 exclude = [
     "target/",
     "docs/PUBLISH.md",

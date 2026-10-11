@@ -2,6 +2,7 @@
 
 mod backup;
 mod guid;
+mod i18n;
 mod power;
 mod win;
 

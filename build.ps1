@@ -10,4 +10,4 @@ if (-not $cargo) {
     Write-Error 'Rust/cargo не найден. Установите: https://www.rust-lang.org/tools/install'
 }
 & $cargo.Source build --release
-Write-Host "Готово: $PSScriptRoot\target\release\power-settings-visibility.exe"
+Write-Host "Done: $PSScriptRoot\target\release\power-settings-explorer.exe"

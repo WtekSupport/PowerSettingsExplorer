@@ -15,6 +15,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject AI / Cursor commit attribution
+        shell: pwsh
+        run: ./scripts/check-no-ai-authors.ps1
 
       - name: Install Rust (MSVC)
         uses: dtolnay/rust-toolchain@stable
@@ -30,7 +36,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/power-settings-visibility.exe
+          files: target/release/power-settings-explorer.exe
           generate_release_notes: true
           draft: false
         env:

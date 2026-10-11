@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Win32 UI: tree of power settings from the registry, Russian descriptions, visibility control.
+- Product name: **Power Settings Explorer**.
+- Win32 UI: tree of power settings from the registry, EN/RU UI, visibility control.
 - Visibility modes: **On** / **Off** / **Auto** (`Attributes` = show / hide / delete for Windows default).
 - Self-elevation via UAC (`requireAdministrator` + `runas` fallback).
 - Zero crate dependencies (`std` + Win32 FFI only).

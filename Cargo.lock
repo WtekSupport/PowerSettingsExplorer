@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "power-settings-visibility"
+name = "power-settings-explorer"
 version = "0.1.0"

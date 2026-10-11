@@ -1,0 +1,27 @@
+#!/bin/sh
+# Strip AI / Cursor attribution trailers from commit messages before they land in history.
+msg_file="$1"
+tmp_file="${msg_file}.strip-ai.tmp"
+
+grep -viE \
+  -e '^[[:space:]]*Co-authored-by:[[:space:]]*Cursor([[:space:]]|<|$)' \
+  -e '^[[:space:]]*Co-authored-by:[[:space:]].*<cursoragent@cursor\.com>' \
+  -e '^[[:space:]]*Made-with:[[:space:]]*Cursor' \
+  -e '^[[:space:]]*Made with Cursor' \
+  -e '^[[:space:]]*Generated-by:[[:space:]]*(Cursor|ChatGPT|Claude|Copilot|Gemini|AI)' \
+  -e '^[[:space:]]*Assisted-by:[[:space:]]*(Cursor|ChatGPT|Claude|Copilot|Gemini|AI)' \
+  "$msg_file" > "$tmp_file" || true
+
+# Drop trailing blank lines left after stripping trailers
+# portable: rewrite without trailing empty lines
+awk '
+  { lines[NR] = $0 }
+  END {
+    end = NR
+    while (end > 0 && lines[end] ~ /^[[:space:]]*$/) end--
+    for (i = 1; i <= end; i++) print lines[i]
+  }
+' "$tmp_file" > "$msg_file"
+
+rm -f "$tmp_file"
+exit 0

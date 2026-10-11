@@ -8,9 +8,12 @@ pub const HKEY_LOCAL_MACHINE: isize = 0x8000_0002_u32 as isize;
 pub const KEY_READ: u32 = 0x20019;
 pub const KEY_WRITE: u32 = 0x20006;
 pub const KEY_SET_VALUE: u32 = 0x0002;
+pub const REG_SZ: u32 = 1;
+pub const REG_EXPAND_SZ: u32 = 2;
 pub const REG_DWORD: u32 = 4;
 pub const ERROR_SUCCESS: u32 = 0;
 pub const ERROR_FILE_NOT_FOUND: u32 = 2;
+pub const ERROR_MORE_DATA: u32 = 234;
 
 type HKEY = isize;
 type LSTATUS = u32;
@@ -96,6 +99,62 @@ impl RegKey {
             index += 1;
         }
         Ok(out)
+    }
+
+    pub fn query_string(&self, name: &str) -> Result<Option<String>, u32> {
+        let name_w = to_wide(name);
+        let mut reg_type = 0u32;
+        let mut data_len = 0u32;
+        let st = unsafe {
+            RegQueryValueExW(
+                self.handle,
+                name_w.as_ptr(),
+                ptr::null_mut(),
+                &mut reg_type,
+                ptr::null_mut(),
+                &mut data_len,
+            )
+        };
+        if st == ERROR_FILE_NOT_FOUND {
+            return Ok(None);
+        }
+        if st != ERROR_SUCCESS && st != ERROR_MORE_DATA {
+            return Err(st);
+        }
+        if data_len == 0 {
+            return Ok(None);
+        }
+        if reg_type != REG_SZ && reg_type != REG_EXPAND_SZ {
+            return Ok(None);
+        }
+        let mut buf = vec![0u8; data_len as usize];
+        let mut data_len2 = data_len;
+        let st2 = unsafe {
+            RegQueryValueExW(
+                self.handle,
+                name_w.as_ptr(),
+                ptr::null_mut(),
+                &mut reg_type,
+                buf.as_mut_ptr(),
+                &mut data_len2,
+            )
+        };
+        if st2 != ERROR_SUCCESS {
+            return Err(st2);
+        }
+        let n_chars = (data_len2 as usize) / 2;
+        if n_chars == 0 {
+            return Ok(None);
+        }
+        let wide = unsafe {
+            std::slice::from_raw_parts(buf.as_ptr() as *const u16, n_chars)
+        };
+        let s = super::wide::from_wide(wide).trim_end_matches('\0').trim().to_string();
+        if s.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(s))
+        }
     }
 
     pub fn query_dword(&self, name: &str) -> Result<Option<u32>, u32> {

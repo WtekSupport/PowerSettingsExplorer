@@ -4,7 +4,7 @@ use crate::power::visibility::{set_hidden, set_shown};
 use std::fs;
 use std::io::{BufRead, Write};
 
-const HEADER: &str = "# power-settings-visibility backup v1\n";
+const HEADER: &str = "# power-settings-explorer backup v1\n";
 
 pub fn export_backup(path: &str, nodes: &[SubgroupNode]) -> std::io::Result<usize> {
     let mut f = fs::File::create(path)?;

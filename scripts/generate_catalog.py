@@ -28,16 +28,46 @@ SUBGROUP_RU = {
     "5fb4938d-1ee8-4b0f-9a3c-5036b0ab995c": "графика",
 }
 
-WHERE_VALUES = (
+WHERE_VALUES_RU = (
     "Панель управления → Электропитание → Настройка схемы → Изменить дополнительные параметры. "
     "Для каждого пункта задаются отдельные значения «От сети» и «От батареи»."
 )
 
-VISIBILITY_NOTE = (
+VISIBILITY_NOTE_RU = (
     "Селектор «Вкл / Выкл / Авто» справа меняет только видимость пункта в том же списке "
     "дополнительных параметров. «Авто» — без явного Attributes в реестре (как у Windows по умолчанию). "
     "Сами числа и режимы «От сети» / «От батареи» здесь не редактируются."
 )
+
+WHERE_VALUES_EN = (
+    "Control Panel → Power Options → Change plan settings → Change advanced power settings. "
+    "Each setting has separate On battery and Plugged in values."
+)
+
+VISIBILITY_NOTE_EN = (
+    "The On / Off / Auto selector on the right changes only whether the item appears in that "
+    "advanced settings list. Auto removes an explicit Attributes value (Windows default). "
+    "AC/DC numeric values are not edited here."
+)
+
+SUBGROUP_EN = {
+    "fea3413e-7e05-4911-9a71-700331f1c294": "general",
+    "0012ee47-9041-4b5d-9b77-535fba8b1442": "hard disk",
+    "238c9fa8-0aad-41ed-83f4-97be242c8f20": "sleep",
+    "2a737441-1930-4402-8d77-b2bebba308a3": "USB",
+    "2e601130-5351-4d9d-8e04-252966bad054": "idle resiliency",
+    "4f971e89-eebd-4455-a8de-9e59040e7347": "power buttons and lid",
+    "501a4d13-42af-4429-9fd1-a8218c268e20": "PCI Express",
+    "54533251-82be-4824-96c1-47b60b740d00": "processor",
+    "7516b95f-f776-4464-8c53-06167f40cc99": "display",
+    "e73a048d-bf27-4f12-9731-8b2076e8891f": "battery",
+    "9596fb26-9850-41fd-ac3e-f7c3c00afd4b": "multimedia",
+    "de830923-a562-41af-a086-e3a2c6bad2da": "energy saver",
+    "8619b916-e004-4dd8-9b66-dae86f806698": "presence aware power",
+    "48672f38-7a9a-4bb2-8bf8-3d85be19de4e": "interrupt steering",
+    "44f3beca-a7c0-460e-9df2-bb8b99e0cba6": "Intel graphics",
+    "5fb4938d-1ee8-4b0f-9a3c-5036b0ab995c": "graphics",
+}
 
 TITLE_OVERRIDES = {
     "4faab71a-92e5-4726-b531-224559672d19": "Политика простоя устройств",
@@ -260,7 +290,7 @@ def section(title: str, text: str) -> str | None:
     return f"{title}\n\n{t}"
 
 
-def compose_body(title: str, en: str, sg_name: str, purpose: str, behavior: str, tips: str) -> str:
+def compose_body_ru(title: str, en: str, sg_name: str, purpose: str, behavior: str, tips: str) -> str:
     intro = f"«{title}» · раздел «{sg_name}»."
     if en and en.strip() and title != en:
         intro += f"\nИмя в Windows: «{en}»."
@@ -270,12 +300,137 @@ def compose_body(title: str, en: str, sg_name: str, purpose: str, behavior: str,
         section("Назначение", purpose),
         section("Поведение", behavior),
         section("На практике", tips),
-        section("Где задать «От сети» / «От батареи»", WHERE_VALUES),
-        section("Видимость в этой программе", VISIBILITY_NOTE),
+        section("Где задать «От сети» / «От батареи»", WHERE_VALUES_RU),
+        section("Видимость в этой программе", VISIBILITY_NOTE_RU),
     ):
         if block:
             blocks.append(block)
     return "\n\n".join(blocks)
+
+
+def compose_body_en(title: str, en: str, sg_name: str, purpose: str, behavior: str, tips: str) -> str:
+    intro = f"“{title}” · section “{sg_name}”."
+    if en and en.strip() and title != en:
+        intro += f"\nWindows name: “{en}”."
+
+    blocks: list[str] = [intro]
+    for block in (
+        section("Purpose", purpose),
+        section("Behavior", behavior),
+        section("In practice", tips),
+        section("Where to set On battery / Plugged in", WHERE_VALUES_EN),
+        section("Visibility in this program", VISIBILITY_NOTE_EN),
+    ):
+        if block:
+            blocks.append(block)
+    return "\n\n".join(blocks)
+
+
+def title_en(en: str, guid: str) -> str:
+    g = guid.lower()
+    en = clean_en(en)
+    if g in MANUAL:
+        # Prefer Windows EN name when available; else Russian title as last resort is avoided.
+        return en or MANUAL[g][0]
+    if not en:
+        return f"Setting ({guid[:8]}…)"
+    return en
+
+
+def _eff_class_tip_en(en: str) -> str:
+    if "efficiency class 1" in en.lower():
+        return (
+            "The “Processor Power Efficiency Class 1” suffix is for efficient (E-) cores on hybrid "
+            "Intel CPUs; the matching item without the suffix is usually for P-cores."
+        )
+    return ""
+
+
+def explain_detail_en(en: str, subgroup: str) -> tuple[str, str, str]:
+    en_l = en.lower()
+    sg = SUBGROUP_EN.get(subgroup.lower(), "power")
+    extra = _eff_class_tip_en(en)
+
+    def pack(purpose: str, behavior: str, tips: str = "") -> tuple[str, str, str]:
+        if extra and extra not in tips:
+            tips = (tips + " " + extra).strip() if tips else extra
+        return purpose, behavior, tips
+
+    if "core parking" in en_l:
+        return pack(
+            "Controls core parking: how many logical processors Windows keeps active under light load.",
+            "More active cores improve burst responsiveness but raise idle power and heat. "
+            "Aggressive parking saves battery but may add micro-stutters when load starts.",
+            "If FPS hitches or input feels delayed, try raising the minimum unparked cores on battery.",
+        )
+    if "boost mode" in en_l or "boost policy" in en_l:
+        return pack(
+            "How aggressively the CPU uses Turbo Boost (short frequency increases).",
+            "Enabled / aggressive policies raise peak performance and heat. "
+            "Disabled or Efficient keeps temperatures steadier with lower peaks.",
+            "On battery, easing boost is often reasonable; on AC, leave it on for games and renders.",
+        )
+    if "timeout" in en_l:
+        return pack(
+            f"Idle timer in the “{sg}” section: how long before the related action (sleep, power-down, state change).",
+            "Shorter intervals save power sooner but wake devices more often. "
+            "0 or Never disables the automation.",
+            "On battery usually shorter; on AC longer. Balance energy vs first-access latency for disks/NVMe.",
+        )
+    if "policy" in en_l or "polic" in en_l:
+        return pack(
+            f"A policy (mode) in “{sg}”: choose economy, performance, or automatic balance.",
+            "Aggressive economy lowers power and may add latency; performance mode does the opposite.",
+            "Start from a built-in Windows plan; tune a single policy only when the plan is not enough.",
+        )
+    if "sleep" in en_l or "standby" in en_l or "hibern" in en_l or "fasts4" in en_l:
+        return pack(
+            "Controls sleep, hibernate, and related standby modes.",
+            "Sleep wakes quickly and keeps RAM powered; hibernate uses almost no battery while off. "
+            "Timeouts decide when transitions happen unattended.",
+            "If the PC sleeps unexpectedly, check battery timeouts and background tasks.",
+        )
+    if "disk" in en_l or "hard" in en_l or "nvme" in en_l or "ahci" in en_l:
+        return pack(
+            "Storage power: AHCI Link Power Management, NVMe idle timeouts, HDD spin-down.",
+            "Aggressive savings cut idle watts; the first access after idle may take slightly longer.",
+            "On SSD/NVMe avoid extreme “always off” settings without a reason — a moderate idle timeout is usually best.",
+        )
+    if "usb" in en_l:
+        return pack(
+            "USB selective suspend: powering down ports/hubs when idle.",
+            "Saves laptop battery; flash drives, mice, or external disks may disconnect until replugged.",
+            "If a USB device is unstable, disable selective suspend for that plan.",
+        )
+    if "button" in en_l or "lid" in en_l or ("power" in en_l and "action" in en_l):
+        return pack(
+            "Action for the power/sleep button, lid close/open, or similar hardware events.",
+            "Sleep/hibernate keep your session; Shut down ends it; Do nothing is useful for docked lids on AC.",
+            "Laptops commonly use Lid close → Sleep; docks often use Do nothing on AC.",
+        )
+    if "battery" in en_l or "charge" in en_l or "reserve" in en_l or "critical" in en_l:
+        return pack(
+            "Charge thresholds, reserve level, critical battery, and related notifications.",
+            "Earlier warnings give time to save work; a low reserve may force sleep or hibernate.",
+            "Do not set the critical level too low — risk of data loss on sudden power loss.",
+        )
+    if "display" in en_l or "brightness" in en_l or "video" in en_l:
+        return pack(
+            "Display and video: brightness, turn-off timeout, adaptive brightness, playback behavior.",
+            "Display timeout has the largest impact on battery life; brightness is second.",
+            "On battery, 3–5 minutes to turn off the display is common; on AC, longer or never.",
+        )
+    if "processor" in en_l or "frequency" in en_l or "throttl" in en_l or "idle" in en_l:
+        return pack(
+            f"Processor power management in “{sg}”: frequency, idle states, or related limits.",
+            "Tighter limits reduce heat and noise but can cut performance; looser limits do the opposite.",
+            "Change gradually and verify on a typical workload.",
+        )
+    return pack(
+        f"A power setting in the “{sg}” section of the Windows power plan.",
+        "It participates in the balance of performance, heat, and battery life; exact effect depends on hardware and drivers.",
+        f"Use the Windows name “{en}” as a guide. When unsure, keep the plan defaults.",
+    )
 
 
 def body_ru(en: str, guid: str, subgroup: str) -> str:
@@ -288,7 +443,7 @@ def body_ru(en: str, guid: str, subgroup: str) -> str:
     sg_name = SUBGROUP_RU.get(subgroup.lower(), "другие параметры")
 
     if not en:
-        return compose_body(
+        return compose_body_ru(
             f"Параметр ({g[:8]}…)",
             "",
             sg_name,
@@ -298,7 +453,39 @@ def body_ru(en: str, guid: str, subgroup: str) -> str:
         )
 
     purpose, behavior, tips = explain_detail(en, subgroup)
-    return compose_body(title, en, sg_name, purpose, behavior, tips)
+    return compose_body_ru(title, en, sg_name, purpose, behavior, tips)
+
+
+def body_en(en: str, guid: str, subgroup: str) -> str:
+    g = guid.lower()
+    en = clean_en(en)
+    title = title_en(en, guid)
+    sg_name = SUBGROUP_EN.get(subgroup.lower(), "other settings")
+
+    if g == "93b8b6dc-0698-4d1c-9ee4-0644e900c85d":
+        return compose_body_en(
+            "Heterogeneous thread scheduling policy",
+            "Heterogeneous thread scheduling policy",
+            "processor",
+            "Hints the Windows scheduler whether to prefer performant (P) or efficient (E) cores.",
+            "Prefer performant — more work on P-cores (responsiveness, heat, battery use). "
+            "Prefer efficient — more work on E-cores (cooler, quieter, longer battery). "
+            "Automatic — Windows chooses the balance.",
+            "On CPUs without distinct core types (most Ryzen, older Intel) the effect is minimal.",
+        )
+
+    if not en:
+        return compose_body_en(
+            f"Setting ({g[:8]}…)",
+            "",
+            sg_name,
+            "A service or OEM setting without a display name in the export.",
+            "It may belong to a driver or a vendor-specific capability.",
+            "Change it only if you have vendor documentation.",
+        )
+
+    purpose, behavior, tips = explain_detail_en(en, subgroup)
+    return compose_body_en(title, en, sg_name, purpose, behavior, tips)
 
 
 def esc(s: str) -> str:
@@ -324,10 +511,30 @@ def main():
     lines = [
         "// Auto-generated by scripts/generate_catalog.py",
         "",
+        "use crate::i18n::Lang;",
+        "",
         "pub struct CatalogEntry {",
         "    pub guid: &'static str,",
         "    pub title_ru: &'static str,",
+        "    pub title_en: &'static str,",
         "    pub body_ru: &'static str,",
+        "    pub body_en: &'static str,",
+        "}",
+        "",
+        "impl CatalogEntry {",
+        "    pub fn title(&self, lang: Lang) -> &'static str {",
+        "        match lang {",
+        "            Lang::Ru => self.title_ru,",
+        "            Lang::En => self.title_en,",
+        "        }",
+        "    }",
+        "",
+        "    pub fn body(&self, lang: Lang) -> &'static str {",
+        "        match lang {",
+        "            Lang::Ru => self.body_ru,",
+        "            Lang::En => self.body_en,",
+        "        }",
+        "    }",
         "}",
         "",
         "pub static ENTRIES: &[CatalogEntry] = &[",
@@ -335,14 +542,19 @@ def main():
     for row in rows:
         g = row["Setting"].lower()
         sg = row.get("Subgroup", "")
-        t = esc(title_ru(row["EN"], g))
-        b = esc(body_ru(row["EN"], g, sg))
+        en_name = row["EN"]
+        tr = esc(title_ru(en_name, g))
+        te = esc(title_en(en_name, g))
+        br = esc(body_ru(en_name, g, sg))
+        be = esc(body_en(en_name, g, sg))
         lines.extend(
             [
                 "    CatalogEntry {",
                 f'        guid: "{g}",',
-                f'        title_ru: "{t}",',
-                f'        body_ru: "{b}",',
+                f'        title_ru: "{tr}",',
+                f'        title_en: "{te}",',
+                f'        body_ru: "{br}",',
+                f'        body_en: "{be}",',
                 "    },",
             ]
         )
@@ -358,7 +570,7 @@ def main():
         ]
     )
     OUT.write_text("\n".join(lines), encoding="utf-8")
-    print(f"Wrote {len(rows)} entries to {OUT}")
+    print(f"Wrote {len(rows)} bilingual entries to {OUT}")
 
 
 if __name__ == "__main__":

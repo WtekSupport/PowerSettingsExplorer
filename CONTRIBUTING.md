@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve **Power Settings Visibility**.
+Thanks for helping improve **Power Settings Explorer**.
 
 ## Development
 
@@ -8,11 +8,11 @@ Requirements:
 
 - Windows 10/11 x64
 - [Rust stable (MSVC)](https://www.rust-lang.org/tools/install)
-- Python 3 (only if regenerating the RU catalog)
+- Python 3 (only if regenerating the catalog)
 
 ```powershell
 cargo build --release
-.\target\release\power-settings-visibility.exe
+.\target\release\power-settings-explorer.exe
 ```
 
 Or:
@@ -38,6 +38,7 @@ python scripts\generate_catalog.py
 - Keep the dependency policy: **no crates.io crates** — only `std` + Win32 FFI.
 - Prefer small, focused PRs (UI, visibility logic, catalog, docs).
 - Describe what you tested on (Windows build, admin/non-admin).
+- Do **not** add Cursor / AI co-author trailers (`Co-authored-by: Cursor`, `Made-with: Cursor`, etc.). CI rejects them.
 
 ## Code style
 

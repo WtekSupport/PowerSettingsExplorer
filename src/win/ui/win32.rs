@@ -39,6 +39,7 @@ pub const WC_COMBOBOXW: &str = "ComboBox";
 pub const CBS_DROPDOWNLIST: u32 = 0x0003;
 pub const CBS_HASSTRINGS: u32 = 0x0200;
 pub const CB_ADDSTRING: UINT = 0x0143;
+pub const CB_RESETCONTENT: UINT = 0x014B;
 pub const CB_SETCURSEL: UINT = 0x014E;
 pub const CB_GETCURSEL: UINT = 0x0147;
 pub const CBN_SELCHANGE: u16 = 1;
@@ -96,22 +97,32 @@ pub const TVS_HASBUTTONS: u32 = 0x0001;
 pub const TVS_LINESATROOT: u32 = 0x0008;
 pub const TVS_SHOWSELALWAYS: u32 = 0x0020;
 
-pub const TVM_INSERTITEMW: UINT = 0x1100 + 50;
-pub const TVM_GETITEMW: UINT = 0x1100 + 62;
-pub const TVM_GETNEXTITEM: UINT = 0x1100 + 13;
-pub const TVM_HITTEST: UINT = 0x1100 + 17;
-pub const TVM_SELECTITEM: UINT = 0x1100 + 11;
-pub const TVM_DELETEALLITEMS: UINT = 0x1100 + 5;
+pub const TV_FIRST: UINT = 0x1100;
+pub const TVM_INSERTITEMW: UINT = TV_FIRST + 50;
+pub const TVM_GETITEMW: UINT = TV_FIRST + 62;
+/// Было ошибочно +13 (= TVM_SETITEMA) — из‑за этого стрелки не читали caret.
+pub const TVM_GETNEXTITEM: UINT = TV_FIRST + 10;
+pub const TVM_HITTEST: UINT = TV_FIRST + 17;
+pub const TVM_SELECTITEM: UINT = TV_FIRST + 11;
+pub const TVM_EXPAND: UINT = TV_FIRST + 2;
+pub const TVM_ENSUREVISIBLE: UINT = TV_FIRST + 20;
+/// Удаление узла. Чтобы очистить всё дерево: `lParam = TVI_ROOT`.
+pub const TVM_DELETEITEM: UINT = TV_FIRST + 1;
 /// Для `TVM_GETNEXTITEM` — текущий выбранный элемент.
 pub const TVGN_CARET: u32 = 0x0009;
+
+pub const TVE_EXPAND: WPARAM = 0x0002;
+pub const TVIF_STATE: u32 = 0x0008;
+pub const TVIS_EXPANDED: u32 = 0x0020;
 
 pub const NM_CLICK: i32 = NM_FIRST - 2;
 
 pub const NM_FIRST: i32 = 0;
 /// `TVN_FIRST` from commctrl.h (0U-400U)
 pub const TVN_FIRST: i32 = -400;
-pub const TVN_SELCHANGEDW: i32 = TVN_FIRST - 2;
 pub const TVN_SELCHANGEDA: i32 = TVN_FIRST - 1;
+pub const TVN_SELCHANGEDW: i32 = TVN_FIRST - 2;
+pub const TVN_KEYDOWN: i32 = TVN_FIRST - 12;
 
 pub const ICC_TREEVIEW_CLASSES: u32 = 0x00000200;
 pub const ICC_STANDARD_CLASSES: u32 = 0x00004000;
@@ -123,6 +134,7 @@ pub const IDI_APPLICATION: *const u16 = 32512 as *const u16;
 pub const IDC_ARROW: *const u16 = 32512 as *const u16;
 pub const COLOR_WINDOW: i32 = 5;
 
+pub const GWLP_WNDPROC: i32 = -4;
 pub const GWLP_USERDATA: i32 = -21;
 
 pub const MB_OK: u32 = 0;
@@ -182,13 +194,13 @@ pub const TVIF_CHILDREN: u32 = 0x0040;
 pub const TVI_ROOT: isize = -0x10000;
 pub const TVI_LAST: isize = -0x0FFFF;
 
+/// Как в Win32 на x64: hwnd(8) + id(8) + code(4) + pad(4) = 24.
 #[repr(C)]
 pub struct NMHDR {
     pub hwndFrom: HWND,
     pub idFrom: usize,
     pub code: UINT,
-    /// Выравнивание до 8 байт (как в Win32 `NMHDR` на x64).
-    pub uPadding: u32,
+    pub _pad: u32,
 }
 
 #[repr(C)]
@@ -281,6 +293,14 @@ extern "system" {
     pub fn SendMessageW(hwnd: HWND, msg: UINT, w: WPARAM, l: LPARAM) -> LRESULT;
     pub fn SetWindowLongPtrW(hwnd: HWND, index: i32, val: isize) -> isize;
     pub fn GetWindowLongPtrW(hwnd: HWND, index: i32) -> isize;
+    pub fn CallWindowProcW(
+        prev: isize,
+        hwnd: HWND,
+        msg: UINT,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT;
+    pub fn GetParent(hwnd: HWND) -> HWND;
     pub fn MessageBoxW(hwnd: HWND, text: *const u16, caption: *const u16, typ: u32) -> i32;
     pub fn LoadCursorW(instance: HINSTANCE, name: *const u16) -> isize;
     pub fn GetStockObject(obj: i32) -> isize;

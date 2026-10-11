@@ -1,5 +1,6 @@
 mod win32;
 
+use crate::i18n::{self, Lang};
 use crate::power::catalog;
 use crate::power::catalog_subgroups;
 use crate::power::scan::{scan_all, SettingRef, SubgroupNode};
@@ -16,17 +17,29 @@ pub const ID_TITLE: i32 = 1002;
 pub const ID_DESC: i32 = 1003;
 pub const ID_VIS_LABEL: i32 = 1004;
 pub const ID_VIS_MODE: i32 = 1005;
+pub const ID_LANG_LABEL: i32 = 1006;
+pub const ID_LANG: i32 = 1007;
 
 const WM_TREE_SYNC: UINT = 0x8000 + 42;
 const WM_LBUTTONDOWN: UINT = 0x0201;
 const WM_LBUTTONUP: UINT = 0x0202;
 const WM_KEYUP: UINT = 0x0101;
+const WM_KEYDOWN: UINT = 0x0100;
 const VK_UP: WPARAM = 0x26;
 const VK_DOWN: WPARAM = 0x28;
+const VK_LEFT: WPARAM = 0x25;
+const VK_RIGHT: WPARAM = 0x27;
 const VK_HOME: WPARAM = 0x24;
 const VK_END: WPARAM = 0x23;
 const VK_PRIOR: WPARAM = 0x21;
 const VK_NEXT: WPARAM = 0x22;
+
+fn is_tree_nav_key(wparam: WPARAM) -> bool {
+    matches!(
+        wparam,
+        VK_UP | VK_DOWN | VK_LEFT | VK_RIGHT | VK_HOME | VK_END | VK_PRIOR | VK_NEXT
+    )
+}
 
 struct AppState {
     hwnd: HWND,
@@ -35,13 +48,22 @@ struct AppState {
     desc: HWND,
     vis_label: HWND,
     vis_mode: HWND,
+    lang_label: HWND,
+    lang_combo: HWND,
+    lang: Lang,
     nodes: Vec<SubgroupNode>,
     settings_flat: Vec<SettingRef>,
     /// HTREEITEM → индекс в `settings_flat` (надёжнее, чем lParam дерева).
     tree_item_index: Vec<(isize, usize)>,
+    /// HTREEITEM → индекс в `nodes` (раздел/подгруппа).
+    tree_group_index: Vec<(isize, usize)>,
+    root_item: isize,
     selected_index: Option<usize>,
+    /// Selected subgroup node index when a section (not a leaf) is active.
+    selected_group: Option<usize>,
     /// Подавляет запись в реестр при программной смене списка.
     suppress_vis_apply: bool,
+    suppress_lang_apply: bool,
     font: HFONT,
 }
 
@@ -77,13 +99,6 @@ fn newlines_for_edit(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\n', "\r\n")
 }
 
-fn is_desc_section_header(line: &str) -> bool {
-    let t = line.trim();
-    matches!(t, "Назначение" | "Поведение" | "На практике")
-        || t.starts_with("Где задать")
-        || t.starts_with("Видимость")
-}
-
 fn utf16_line_spans(w: &[u16]) -> Vec<(i32, i32)> {
     let mut spans = Vec::new();
     let mut line_start = 0usize;
@@ -102,11 +117,11 @@ fn utf16_line_spans(w: &[u16]) -> Vec<(i32, i32)> {
     spans
 }
 
-fn apply_desc_bold_headers(hwnd: HWND, wide: &[u16]) {
+fn apply_desc_bold_headers(hwnd: HWND, wide: &[u16], lang: Lang) {
     unsafe {
         for (start, end) in utf16_line_spans(wide) {
             let line = String::from_utf16_lossy(&wide[start as usize..end as usize]);
-            if !is_desc_section_header(&line) {
+            if !i18n::is_section_header(lang, &line) {
                 continue;
             }
             let mut range = CHARRANGE {
@@ -141,11 +156,30 @@ fn apply_desc_bold_headers(hwnd: HWND, wide: &[u16]) {
     }
 }
 
-fn set_desc_text(hwnd: HWND, text: &str) {
+fn set_desc_text(hwnd: HWND, text: &str, lang: Lang) {
     let formatted = newlines_for_edit(text);
     let wide = to_wide(&formatted);
     set_text(hwnd, &formatted);
-    apply_desc_bold_headers(hwnd, &wide);
+    apply_desc_bold_headers(hwnd, &wide, lang);
+}
+
+fn setting_label(s: &SettingRef, lang: Lang) -> String {
+    catalog::lookup(&s.setting_str)
+        .map(|e| e.title(lang).to_string())
+        .unwrap_or_else(|| s.system_name.clone())
+}
+
+fn subgroup_label(n: &SubgroupNode, lang: Lang) -> String {
+    // Strict UI language: catalog title first; OS name only if catalog has no entry.
+    catalog_subgroups::lookup(&n.guid_str)
+        .map(|e| e.title(lang).to_string())
+        .unwrap_or_else(|| {
+            if !n.system_name.is_empty() {
+                n.system_name.clone()
+            } else {
+                catalog_subgroups::title_or_fallback(&n.guid_str, lang)
+            }
+        })
 }
 
 fn create_control(
@@ -187,11 +221,66 @@ fn apply_font(state: &AppState) {
         state.desc,
         state.vis_label,
         state.vis_mode,
+        state.lang_label,
+        state.lang_combo,
     ] {
         unsafe {
             SendMessageW(h, WM_SETFONT, state.font as WPARAM, 1);
         }
     }
+}
+
+fn refill_vis_combo(state: &mut AppState) {
+    let t = i18n::ui(state.lang);
+    let prev = state
+        .selected_index
+        .and_then(|i| state.settings_flat.get(i))
+        .map(|s| mode_from_attributes(s.attributes));
+    state.suppress_vis_apply = true;
+    unsafe {
+        SendMessageW(state.vis_mode, CB_RESETCONTENT, 0, 0);
+    }
+    combo_add_item(state.vis_mode, t.vis_on);
+    combo_add_item(state.vis_mode, t.vis_off);
+    combo_add_item(state.vis_mode, t.vis_auto);
+    if let Some(mode) = prev {
+        unsafe {
+            SendMessageW(state.vis_mode, CB_SETCURSEL, mode.combo_index(), 0);
+        }
+    } else {
+        unsafe {
+            SendMessageW(state.vis_mode, CB_SETCURSEL, 0xFFFF_FFFF, 0);
+        }
+    }
+    state.suppress_vis_apply = false;
+}
+
+fn refill_lang_combo(state: &mut AppState) {
+    state.suppress_lang_apply = true;
+    unsafe {
+        SendMessageW(state.lang_combo, CB_RESETCONTENT, 0, 0);
+    }
+    // Labels stay bilingual so the switcher is always recognizable.
+    combo_add_item(state.lang_combo, "Русский");
+    combo_add_item(state.lang_combo, "English");
+    unsafe {
+        SendMessageW(
+            state.lang_combo,
+            CB_SETCURSEL,
+            state.lang.combo_index(),
+            0,
+        );
+    }
+    state.suppress_lang_apply = false;
+}
+
+fn apply_language_chrome(state: &mut AppState) {
+    let t = i18n::ui(state.lang);
+    set_text(state.hwnd, t.window_title);
+    set_text(state.vis_label, t.vis_label);
+    set_text(state.lang_label, t.lang_label);
+    refill_vis_combo(state);
+    refill_lang_combo(state);
 }
 
 fn combo_add_item(combo: HWND, text: &str) {
@@ -227,13 +316,17 @@ fn set_vis_mode_disabled(state: &mut AppState) {
 }
 
 fn rebuild_tree(state: &mut AppState) {
+    // TVM_DELETEITEM + TVI_ROOT очищает всё дерево (отдельного DELETEALLITEMS нет).
     unsafe {
-        SendMessageW(state.tree, TVM_DELETEALLITEMS, 0, 0);
+        SendMessageW(state.tree, TVM_DELETEITEM, 0, TVI_ROOT);
     }
     state.settings_flat.clear();
     state.tree_item_index.clear();
+    state.tree_group_index.clear();
+    state.root_item = 0;
 
-    let root_label = to_wide("Параметры электропитания");
+    let root_name = i18n::ui(state.lang).root_label.to_string();
+    let root_label = to_wide(&root_name);
     let root_item = TVITEMW {
         mask: TVIF_TEXT | TVIF_CHILDREN,
         pszText: root_label.as_ptr() as *mut u16,
@@ -247,18 +340,22 @@ fn rebuild_tree(state: &mut AppState) {
         item: root_item,
     };
     let root = unsafe { SendMessageW(state.tree, TVM_INSERTITEMW, 0, &mut ins as *mut _ as LPARAM) };
+    state.root_item = root as isize;
 
-    for node in &state.nodes {
+    let lang = state.lang;
+    for (node_idx, node) in state.nodes.iter().enumerate() {
         if node.settings.is_empty() {
             continue;
         }
-        let sg_title = catalog_subgroups::title_or_fallback(&node.guid_str);
+        let sg_title = subgroup_label(node, lang);
         let mut sg_w = to_wide(&sg_title);
         let sg_item = TVITEMW {
-            mask: TVIF_TEXT | TVIF_CHILDREN,
+            mask: TVIF_TEXT | TVIF_CHILDREN | TVIF_PARAM,
             pszText: sg_w.as_mut_ptr(),
             cchTextMax: -1,
             cChildren: 1,
+            // Отрицательный lParam: раздел (не путать с параметрами, где lParam >= 1).
+            lParam: -((node_idx + 1) as isize),
             ..unsafe { std::mem::zeroed() }
         };
         let mut sg_ins = TVINSERTSTRUCTW {
@@ -267,15 +364,17 @@ fn rebuild_tree(state: &mut AppState) {
             item: sg_item,
         };
         let sg_h =
-            unsafe { SendMessageW(state.tree, TVM_INSERTITEMW, 0, &mut sg_ins as *mut _ as LPARAM) };
+            unsafe { SendMessageW(state.tree, TVM_INSERTITEMW, 0, &mut sg_ins as *mut _ as LPARAM) }
+                as isize;
+        if sg_h != 0 {
+            state.tree_group_index.push((sg_h, node_idx));
+        }
 
         for s in &node.settings {
             let idx = state.settings_flat.len();
             state.settings_flat.push(s.clone());
-            let title = catalog::lookup(&s.setting_str)
-                .map(|e| e.title_ru.to_string())
-                .unwrap_or_else(|| s.setting_str.clone());
-            let mut leaf_w = to_wide(&title);
+            let leaf_title = setting_label(s, lang);
+            let mut leaf_w = to_wide(&leaf_title);
             let leaf = TVITEMW {
                 mask: TVIF_TEXT | TVIF_PARAM,
                 pszText: leaf_w.as_mut_ptr(),
@@ -300,26 +399,22 @@ fn rebuild_tree(state: &mut AppState) {
 
 /// Читает реестр и перестраивает дерево (вызывается при старте и после записи).
 fn refresh_from_registry(state: &mut AppState) {
+    let t = i18n::ui(state.lang);
     match scan_all() {
         Ok(nodes) => {
             state.nodes = nodes;
             rebuild_tree(state);
             state.selected_index = None;
-            set_text(state.title, "Выберите параметр слева");
-            set_desc_text(
-                state.desc,
-                "Список загружен из реестра Windows.\n\n\
-                 Выберите пункт слева — справа появятся описание блоками и селектор видимости (Вкл / Выкл / Авто).",
-            );
+            state.selected_group = None;
+            set_text(state.title, t.pick_setting);
+            set_desc_text(state.desc, t.list_loaded, state.lang);
             set_vis_mode_disabled(state);
         }
         Err(e) => {
             msg_box(
                 state.hwnd,
-                &format!(
-                    "Не удалось прочитать параметры из реестра (код {e}).\nЗапустите программу от имени администратора."
-                ),
-                "Ошибка",
+                &t.registry_read_fail.replace("{code}", &e.to_string()),
+                t.error_title,
                 MB_OK | MB_ICONWARNING,
             );
         }
@@ -346,19 +441,224 @@ fn resync_setting(state: &mut AppState, index: usize) {
 
 fn select_setting(state: &mut AppState, index: usize) {
     state.selected_index = Some(index);
+    state.selected_group = None;
     let s = &state.settings_flat[index];
     let cat = catalog::lookup(&s.setting_str);
-    let title = cat.map(|c| c.title_ru).unwrap_or("Параметр электропитания");
-    let body = cat.map(|c| c.body_ru).unwrap_or(
-        "Назначение\nОписание для этого GUID пока не добавлено в каталог.\n\n\
-         Где задать «От сети» / «От батареи»\n\
-         Панель управления → Электропитание → Настройка схемы → Изменить дополнительные параметры.\n\n\
-         Видимость в этой программе\n\
-         Селектор «Вкл / Выкл / Авто» ниже меняет только видимость пункта в списке, не сами значения.",
-    );
-    set_text(state.title, title);
-    set_desc_text(state.desc, body);
+    let title = setting_label(s, state.lang);
+    let t = i18n::ui(state.lang);
+    let body = cat
+        .map(|c| c.body(state.lang))
+        .unwrap_or(t.no_catalog_body);
+    set_text(state.title, &title);
+    set_desc_text(state.desc, body, state.lang);
     set_vis_mode_combo(state, mode_from_attributes(s.attributes));
+}
+
+fn select_root(state: &mut AppState) {
+    state.selected_index = None;
+    state.selected_group = None;
+    let groups = state
+        .nodes
+        .iter()
+        .filter(|n| !n.settings.is_empty())
+        .count();
+    let settings = state.settings_flat.len();
+    let t = i18n::ui(state.lang);
+    set_text(state.title, t.root_label);
+    set_desc_text(
+        state.desc,
+        &t.root_body
+            .replace("{groups}", &groups.to_string())
+            .replace("{settings}", &settings.to_string()),
+        state.lang,
+    );
+    set_vis_mode_disabled(state);
+}
+
+fn select_subgroup(state: &mut AppState, node_idx: usize) {
+    state.selected_index = None;
+    state.selected_group = Some(node_idx);
+    let Some(node) = state.nodes.get(node_idx) else {
+        return;
+    };
+    let title = subgroup_label(node, state.lang);
+    let t = i18n::ui(state.lang);
+    let hint = catalog_subgroups::lookup(&node.guid_str)
+        .map(|e| e.hint(state.lang))
+        .unwrap_or(t.group_fallback_hint);
+    let count = node.settings.len();
+    set_text(state.title, &title);
+    set_desc_text(
+        state.desc,
+        &t.group_body_fmt
+            .replace("{hint}", hint)
+            .replace("{count}", &count.to_string()),
+        state.lang,
+    );
+    set_vis_mode_disabled(state);
+}
+
+#[derive(Clone)]
+enum TreeSelectionKey {
+    Root,
+    Group(String),
+    Setting {
+        subgroup: String,
+        setting: String,
+    },
+}
+
+struct TreeUiSnapshot {
+    root_expanded: bool,
+    expanded_groups: Vec<String>,
+    selection: TreeSelectionKey,
+}
+
+fn tree_item_is_expanded(tree: HWND, h_item: isize) -> bool {
+    if h_item == 0 {
+        return false;
+    }
+    let mut item = TVITEMW {
+        mask: TVIF_STATE,
+        hItem: h_item,
+        stateMask: TVIS_EXPANDED,
+        ..unsafe { std::mem::zeroed() }
+    };
+    let ok = unsafe { SendMessageW(tree, TVM_GETITEMW, 0, &mut item as *mut _ as LPARAM) };
+    ok != 0 && (item.state & TVIS_EXPANDED) != 0
+}
+
+fn tree_expand_item(tree: HWND, h_item: isize) {
+    if h_item == 0 {
+        return;
+    }
+    unsafe {
+        SendMessageW(tree, TVM_EXPAND, TVE_EXPAND, h_item);
+    }
+}
+
+fn tree_select_item(tree: HWND, h_item: isize) {
+    if h_item == 0 {
+        return;
+    }
+    unsafe {
+        SendMessageW(tree, TVM_SELECTITEM, TVGN_CARET as WPARAM, h_item);
+        SendMessageW(tree, TVM_ENSUREVISIBLE, 0, h_item);
+    }
+}
+
+fn capture_tree_ui(state: &AppState) -> TreeUiSnapshot {
+    let root_expanded =
+        state.root_item != 0 && tree_item_is_expanded(state.tree, state.root_item);
+    let mut expanded_groups = Vec::new();
+    for (h, idx) in &state.tree_group_index {
+        if tree_item_is_expanded(state.tree, *h) {
+            if let Some(n) = state.nodes.get(*idx) {
+                expanded_groups.push(n.guid_str.clone());
+            }
+        }
+    }
+
+    let selection = if let Some(i) = state.selected_index {
+        if let Some(s) = state.settings_flat.get(i) {
+            TreeSelectionKey::Setting {
+                subgroup: s.subgroup_str.clone(),
+                setting: s.setting_str.clone(),
+            }
+        } else {
+            TreeSelectionKey::Root
+        }
+    } else if let Some(g) = state.selected_group {
+        if let Some(n) = state.nodes.get(g) {
+            TreeSelectionKey::Group(n.guid_str.clone())
+        } else {
+            TreeSelectionKey::Root
+        }
+    } else {
+        TreeSelectionKey::Root
+    };
+
+    TreeUiSnapshot {
+        root_expanded,
+        expanded_groups,
+        selection,
+    }
+}
+
+fn restore_tree_ui(state: &mut AppState, snap: &TreeUiSnapshot) {
+    if snap.root_expanded {
+        tree_expand_item(state.tree, state.root_item);
+    }
+    for guid in &snap.expanded_groups {
+        if let Some((h, _)) = state
+            .tree_group_index
+            .iter()
+            .find(|(_, idx)| state.nodes.get(*idx).map(|n| &n.guid_str) == Some(guid))
+        {
+            tree_expand_item(state.tree, *h);
+        }
+    }
+
+    match &snap.selection {
+        TreeSelectionKey::Root => {
+            select_root(state);
+            tree_select_item(state.tree, state.root_item);
+        }
+        TreeSelectionKey::Group(guid) => {
+            if let Some((h, node_idx)) = state
+                .tree_group_index
+                .iter()
+                .find(|(_, idx)| state.nodes.get(*idx).map(|n| &n.guid_str) == Some(guid))
+                .map(|(h, i)| (*h, *i))
+            {
+                tree_expand_item(state.tree, state.root_item);
+                select_subgroup(state, node_idx);
+                tree_select_item(state.tree, h);
+            } else {
+                select_root(state);
+                tree_select_item(state.tree, state.root_item);
+            }
+        }
+        TreeSelectionKey::Setting { subgroup, setting } => {
+            if let Some((h_leaf, idx)) = state.tree_item_index.iter().find_map(|(h, i)| {
+                let s = state.settings_flat.get(*i)?;
+                if &s.subgroup_str == subgroup && &s.setting_str == setting {
+                    Some((*h, *i))
+                } else {
+                    None
+                }
+            }) {
+                // Раскрыть корень и родительский раздел.
+                tree_expand_item(state.tree, state.root_item);
+                if let Some((h_g, _)) = state.tree_group_index.iter().find(|(_, ni)| {
+                    state
+                        .nodes
+                        .get(*ni)
+                        .map(|n| &n.guid_str == subgroup)
+                        .unwrap_or(false)
+                }) {
+                    tree_expand_item(state.tree, *h_g);
+                }
+                select_setting(state, idx);
+                tree_select_item(state.tree, h_leaf);
+            } else {
+                select_root(state);
+                tree_select_item(state.tree, state.root_item);
+            }
+        }
+    }
+}
+
+fn apply_language(state: &mut AppState, lang: Lang) {
+    if state.lang == lang {
+        return;
+    }
+    let snap = capture_tree_ui(state);
+    state.lang = lang;
+    i18n::save_lang(lang);
+    apply_language_chrome(state);
+    rebuild_tree(state);
+    restore_tree_ui(state, &snap);
 }
 
 fn apply_vis_mode_from_combo(state: &mut AppState) {
@@ -375,12 +675,11 @@ fn apply_vis_mode_from_combo(state: &mut AppState) {
         return;
     }
     if let Err(e) = apply_mode(&s.subgroup, &s.setting, &s.registry_path, mode) {
+        let t = i18n::ui(state.lang);
         msg_box(
             state.hwnd,
-            &format!(
-                "Не удалось записать в реестр (код {e}).\nНужен запуск от администратора."
-            ),
-            "Ошибка",
+            &t.registry_write_fail.replace("{code}", &e.to_string()),
+            t.error_title,
             MB_OK | MB_ICONWARNING,
         );
         set_vis_mode_combo(state, prev);
@@ -395,27 +694,6 @@ fn apply_vis_mode_from_combo(state: &mut AppState) {
 /// В `TVN_SELCHANGED` поле `lParam` в уведомлении часто пустое — читаем через `TVM_GETITEM`.
 fn tree_caret_item(tree: HWND) -> isize {
     unsafe { SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize }
-}
-
-fn tree_item_stored_index(tree: HWND, h_item: isize) -> Option<usize> {
-    if h_item == 0 {
-        return None;
-    }
-    let mut item = TVITEMW {
-        mask: TVIF_PARAM,
-        hItem: h_item,
-        ..unsafe { std::mem::zeroed() }
-    };
-    let ok = unsafe { SendMessageW(tree, TVM_GETITEMW, 0, &mut item as *mut _ as LPARAM) };
-    if ok == 0 {
-        return None;
-    }
-    let lp = item.lParam;
-    if lp >= 1 {
-        Some((lp - 1) as usize)
-    } else {
-        None
-    }
 }
 
 fn tree_hit_item(tree: HWND, x: i32, y: i32) -> isize {
@@ -438,43 +716,46 @@ fn sync_panel_from_tree(hwnd: HWND, h_item_hint: isize) {
     });
 }
 
+fn request_tree_sync(parent: HWND, h_item_hint: isize) {
+    // PostMessage: после полной обработки клавиши TreeView уже сменит caret.
+    unsafe {
+        PostMessageW(parent, WM_TREE_SYNC, h_item_hint as WPARAM, 0);
+    }
+}
+
 fn tree_mouse_item(hwnd: HWND, lparam: LPARAM) -> isize {
     let x = (lparam & 0xFFFF) as u16 as i16 as i32;
     let y = ((lparam >> 16) & 0xFFFF) as u16 as i16 as i32;
     tree_hit_item(hwnd, x, y)
 }
 
-unsafe extern "system" fn tree_subclass_proc(
+/// Предыдущий WndProc дерева (классический subclass — надёжнее для стрелок, чем SetWindowSubclass).
+static mut TREE_PREV_WNDPROC: isize = 0;
+
+unsafe extern "system" fn tree_wnd_proc(
     hwnd: HWND,
     msg: UINT,
     wparam: WPARAM,
     lparam: LPARAM,
-    _id: usize,
-    parent: usize,
 ) -> LRESULT {
-    let parent = parent as HWND;
-    if msg == WM_LBUTTONDOWN {
-        let h = tree_mouse_item(hwnd, lparam);
-        SendMessageW(parent, WM_TREE_SYNC, h as WPARAM, 0);
-    }
-    let r = DefSubclassProc(hwnd, msg, wparam, lparam);
+    let parent = GetParent(hwnd);
+    let prev = TREE_PREV_WNDPROC;
     match msg {
-        WM_KEYUP if matches!(
-            wparam,
-            VK_UP | VK_DOWN | VK_HOME | VK_END | VK_PRIOR | VK_NEXT
-        ) =>
-        {
-            SendMessageW(parent, WM_TREE_SYNC, 0, 0);
+        WM_LBUTTONDOWN => {
+            let h = tree_mouse_item(hwnd, lparam);
+            let r = CallWindowProcW(prev, hwnd, msg, wparam, lparam);
+            request_tree_sync(parent, h);
+            return r;
+        }
+        WM_KEYDOWN | WM_KEYUP if is_tree_nav_key(wparam) => {
+            let r = CallWindowProcW(prev, hwnd, msg, wparam, lparam);
+            let caret = tree_caret_item(hwnd);
+            request_tree_sync(parent, caret);
+            return r;
         }
         _ => {}
     }
-    r
-}
-
-fn display_title_for(s: &SettingRef) -> String {
-    catalog::lookup(&s.setting_str)
-        .map(|e| e.title_ru.to_string())
-        .unwrap_or_else(|| s.setting_str.clone())
+    CallWindowProcW(prev, hwnd, msg, wparam, lparam)
 }
 
 fn tree_item_label(tree: HWND, h_item: isize) -> Option<String> {
@@ -497,28 +778,73 @@ fn tree_item_label(tree: HWND, h_item: isize) -> Option<String> {
     Some(String::from_utf16_lossy(&buf[..end]))
 }
 
+fn item_lparam(tree: HWND, h_item: isize) -> Option<isize> {
+    if h_item == 0 {
+        return None;
+    }
+    let mut item = TVITEMW {
+        mask: TVIF_PARAM,
+        hItem: h_item,
+        ..unsafe { std::mem::zeroed() }
+    };
+    let ok = unsafe { SendMessageW(tree, TVM_GETITEMW, 0, &mut item as *mut _ as LPARAM) };
+    if ok == 0 {
+        None
+    } else {
+        Some(item.lParam)
+    }
+}
+
 fn setting_index_for_item(state: &AppState, h_item: isize) -> Option<usize> {
-    if let Some(idx) = tree_item_stored_index(state.tree, h_item) {
-        if idx < state.settings_flat.len() {
-            return Some(idx);
+    // Только явный lParam параметра (>= 1). Не угадывать по тексту — иначе
+    // раздел с похожим названием перехватится как параметр.
+    if let Some(lp) = item_lparam(state.tree, h_item) {
+        if lp >= 1 {
+            let idx = (lp - 1) as usize;
+            if idx < state.settings_flat.len() {
+                return Some(idx);
+            }
         }
     }
-    if let Some((_, idx)) = state
+    state
         .tree_item_index
         .iter()
         .find(|(h, _)| *h == h_item)
-    {
+        .map(|(_, idx)| *idx)
+}
+
+fn group_index_for_item(state: &AppState, h_item: isize) -> Option<usize> {
+    if let Some((_, idx)) = state.tree_group_index.iter().find(|(h, _)| *h == h_item) {
         return Some(*idx);
     }
+    // lParam раздела: -(node_idx + 1)
+    if let Some(lp) = item_lparam(state.tree, h_item) {
+        if lp < 0 {
+            let idx = ((-lp) as usize).saturating_sub(1);
+            if idx < state.nodes.len() {
+                return Some(idx);
+            }
+        }
+    }
     let label = tree_item_label(state.tree, h_item)?;
+    let lang = state.lang;
     state
-        .settings_flat
+        .nodes
         .iter()
-        .position(|s| display_title_for(s) == label)
+        .position(|n| !n.settings.is_empty() && subgroup_label(n, lang) == label)
 }
 
 fn apply_tree_selection(state: &mut AppState, h_item: isize) {
     if h_item == 0 {
+        return;
+    }
+    if state.root_item != 0 && h_item == state.root_item {
+        select_root(state);
+        return;
+    }
+    // Сначала раздел (отрицательный lParam / карта групп), потом параметр.
+    if let Some(node_idx) = group_index_for_item(state, h_item) {
+        select_subgroup(state, node_idx);
         return;
     }
     if let Some(idx) = setting_index_for_item(state, h_item) {
@@ -527,19 +853,29 @@ fn apply_tree_selection(state: &mut AppState, h_item: isize) {
             return;
         }
     }
+    // Неизвестный узел — всё равно обновим панель, а не оставим старое описание.
     state.selected_index = None;
-    set_text(state.title, "Выберите параметр слева");
-    set_desc_text(
-        state.desc,
-        "Выберите конкретный параметр (не группу).\n\n\
-         Справа — описание по блокам и режим видимости (Вкл / Выкл / Авто).",
-    );
+    state.selected_group = None;
+    let t = i18n::ui(state.lang);
+    if let Some(label) = tree_item_label(state.tree, h_item) {
+        set_text(state.title, &label);
+        set_desc_text(state.desc, t.unknown_item_body, state.lang);
+    }
     set_vis_mode_disabled(state);
 }
 
+fn notify_code_i32(code: UINT) -> i32 {
+    code as i32
+}
+
 fn is_selchanged_notify(code: UINT) -> bool {
-    let c = code as i32;
+    let c = notify_code_i32(code);
     c == TVN_SELCHANGEDW || c == TVN_SELCHANGEDA
+}
+
+fn tree_notify_needs_sync(code: UINT) -> bool {
+    let c = notify_code_i32(code);
+    is_selchanged_notify(code) || c == NM_CLICK || c == TVN_KEYDOWN
 }
 
 fn layout(state: &AppState) {
@@ -558,9 +894,16 @@ fn layout(state: &AppState) {
     let tree_w = (w * 40 / 100).max(220);
     let right_x = margin + tree_w + margin;
     let right_w = w - right_x - margin;
-    let vis_row_h = 28;
-    let label_w = 220.min(right_w.saturating_sub(130));
-    let combo_w = (right_w - label_w - 8).clamp(100, 160);
+    let row_h = 28;
+    let lang_label_w = 70;
+    let lang_combo_w = 110;
+    let vis_label_w = 220.min(right_w.saturating_sub(130));
+    let vis_combo_w = (right_w - vis_label_w - 8).clamp(100, 160);
+    let bottom_y = h - margin - row_h;
+    let lang_y = bottom_y - row_h - 8;
+    let desc_bottom = lang_y - 8;
+    let desc_top = margin + 36;
+    let desc_h = (desc_bottom - desc_top).max(80);
 
     unsafe {
         MoveWindow(
@@ -572,28 +915,37 @@ fn layout(state: &AppState) {
             TRUE,
         );
         MoveWindow(state.title, right_x, margin, right_w, 28, TRUE);
+        MoveWindow(state.desc, right_x, desc_top, right_w, desc_h, TRUE);
         MoveWindow(
-            state.desc,
+            state.lang_label,
             right_x,
-            margin + 36,
-            right_w,
-            h - 2 * margin - 36 - vis_row_h - 8,
+            lang_y,
+            lang_label_w,
+            row_h,
+            TRUE,
+        );
+        MoveWindow(
+            state.lang_combo,
+            right_x + lang_label_w + 8,
+            lang_y,
+            lang_combo_w,
+            row_h + 200,
             TRUE,
         );
         MoveWindow(
             state.vis_label,
             right_x,
-            h - margin - vis_row_h,
-            label_w,
-            vis_row_h,
+            bottom_y,
+            vis_label_w,
+            row_h,
             TRUE,
         );
         MoveWindow(
             state.vis_mode,
-            right_x + label_w + 8,
-            h - margin - vis_row_h,
-            combo_w,
-            vis_row_h + 200,
+            right_x + vis_label_w + 8,
+            bottom_y,
+            vis_combo_w,
+            row_h + 200,
             TRUE,
         );
     }
@@ -642,9 +994,11 @@ unsafe extern "system" fn wnd_proc(
                 ID_TREE,
                 instance,
             );
+            let lang = i18n::initial_lang();
+            let t = i18n::ui(lang);
             let title = create_control(
                 WC_STATICW,
-                "Загрузка списка…",
+                t.loading,
                 0,
                 0,
                 0,
@@ -666,9 +1020,33 @@ unsafe extern "system" fn wnd_proc(
                 ID_DESC,
                 instance,
             );
+            let lang_label = create_control(
+                WC_STATICW,
+                t.lang_label,
+                0,
+                0,
+                0,
+                80,
+                24,
+                hwnd,
+                ID_LANG_LABEL,
+                instance,
+            );
+            let lang_combo = create_control(
+                WC_COMBOBOXW,
+                "",
+                CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL,
+                0,
+                0,
+                120,
+                200,
+                hwnd,
+                ID_LANG,
+                instance,
+            );
             let vis_label = create_control(
                 WC_STATICW,
-                "Показ в доп. параметрах:",
+                t.vis_label,
                 0,
                 0,
                 0,
@@ -690,9 +1068,6 @@ unsafe extern "system" fn wnd_proc(
                 ID_VIS_MODE,
                 instance,
             );
-            combo_add_item(vis_mode, "Вкл");
-            combo_add_item(vis_mode, "Выкл");
-            combo_add_item(vis_mode, "Авто");
 
             let mut app = Box::new(AppState {
                 hwnd,
@@ -701,18 +1076,30 @@ unsafe extern "system" fn wnd_proc(
                 desc,
                 vis_label,
                 vis_mode,
+                lang_label,
+                lang_combo,
+                lang,
                 nodes: Vec::new(),
                 settings_flat: Vec::new(),
                 tree_item_index: Vec::new(),
+                tree_group_index: Vec::new(),
+                root_item: 0,
                 selected_index: None,
+                selected_group: None,
                 suppress_vis_apply: false,
+                suppress_lang_apply: false,
                 font,
             });
             apply_font(&app);
+            apply_language_chrome(&mut app);
             set_vis_mode_disabled(&mut app);
             layout(&app);
             unsafe {
-                SetWindowSubclass(tree, tree_subclass_proc, 1, hwnd as usize);
+                TREE_PREV_WNDPROC = SetWindowLongPtrW(
+                    tree,
+                    GWLP_WNDPROC,
+                    tree_wnd_proc as usize as isize,
+                );
             }
 
             let ptr = Box::into_raw(app);
@@ -736,15 +1123,11 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_NOTIFY => {
             let nm = &*(lparam as *const NMHDR);
-            with_state(hwnd, |state| {
-                if nm.hwndFrom != state.tree {
-                    return;
-                }
-                if !is_selchanged_notify(nm.code) && nm.code as i32 != NM_CLICK {
-                    return;
-                }
-                sync_panel_from_tree(hwnd, 0);
-            });
+            let tree = with_state(hwnd, |state| state.tree);
+            if nm.hwndFrom == tree && tree_notify_needs_sync(nm.code) {
+                // caret читаем уже в WM_TREE_SYNC — к этому моменту выделение актуально.
+                request_tree_sync(hwnd, 0);
+            }
             return DefWindowProcW(hwnd, msg, wparam, lparam);
         }
         WM_COMMAND => {
@@ -756,6 +1139,16 @@ unsafe extern "system" fn wnd_proc(
                         return;
                     }
                     apply_vis_mode_from_combo(state);
+                });
+            } else if id == ID_LANG && code == CBN_SELCHANGE {
+                with_state(hwnd, |state| {
+                    if state.suppress_lang_apply {
+                        return;
+                    }
+                    let sel = unsafe { SendMessageW(state.lang_combo, CB_GETCURSEL, 0, 0) };
+                    if let Some(lang) = Lang::from_combo_index(sel as isize) {
+                        apply_language(state, lang);
+                    }
                 });
             }
             return 0;
@@ -796,12 +1189,8 @@ pub fn run() -> i32 {
     unsafe {
         let riched = to_wide("riched20.dll");
         if LoadLibraryW(riched.as_ptr()) == 0 {
-            msg_box(
-                0,
-                "Не удалось загрузить riched20.dll (Rich Edit).",
-                "Ошибка",
-                MB_OK | MB_ICONERROR,
-            );
+            let t = i18n::ui(i18n::initial_lang());
+            msg_box(0, t.richedit_fail, t.error_title, MB_OK | MB_ICONERROR);
             return 1;
         }
         let ic = INITCOMMONCONTROLSEX {
@@ -812,7 +1201,7 @@ pub fn run() -> i32 {
     }
 
     let instance = unsafe { GetModuleHandleW(ptr::null()) };
-    let class_name = to_wide("PowerSettingsVisibilityWnd");
+    let class_name = to_wide("PowerSettingsExplorerWnd");
     let wc = WNDCLASSEXW {
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
         style: 0,
@@ -831,7 +1220,7 @@ pub fn run() -> i32 {
         RegisterClassExW(&wc);
     }
 
-    let title = to_wide("Параметры электропитания — видимость");
+    let title = to_wide(i18n::ui(i18n::initial_lang()).window_title);
     let hwnd = unsafe {
         CreateWindowExW(
             0,
